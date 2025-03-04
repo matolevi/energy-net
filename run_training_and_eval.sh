@@ -25,14 +25,13 @@ fi
 
 python iso_game_main.py \
     --algo_type "PPO" \
-    --trained_pcs_model_path '/Users/matanlevi/energy-net/Q_pcs/agent_pcs_final-3.zip' \
-    --pricing_policy "QUADRATIC" \
-    --demand_pattern "SINUSOIDAL" \
+    --pricing_policy "CONSTANT" \
+    --demand_pattern "DOUBLE_PEAK" \
     --cost_type "CONSTANT" \
     --num_pcs_agents 1 \
-    --total_iterations 3 \
-    --train_timesteps_per_iteration 5 \
-    --eval_episodes 5 \
+    --total_iterations 1 \
+    --train_timesteps_per_iteration 1 \
+    --eval_episodes 1 \
     --seed 576
 
 TRAIN_EXIT_CODE=$?
@@ -52,7 +51,7 @@ if [ ${TRAIN_EXIT_CODE} -eq 0 ]; then
         --trained_pcs_model_path '/Users/matanlevi/energy-net/Q_pcs/agent_pcs_final-3.zip' \
         --trained_model_path "${ISO_FINAL_MODEL}" \
         --normalizer_path "${ISO_NORMALIZER}" \
-        --pricing_policy "QUADRATIC" \
+        --pricing_policy "CONSTANT" \
         --demand_pattern "SINUSOIDAL" \
         --cost_type "CONSTANT" \
         --num_pcs_agents 1 \

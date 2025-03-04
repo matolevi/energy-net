@@ -589,7 +589,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train and Evaluate Agent")
     parser.add_argument("--algo_type", default="PPO", help="Algorithm type, e.g. PPO")
-    parser.add_argument("--trained_pcs_model_path", required=True, help="Path to the trained PCSs model")
+    parser.add_argument("--trained_pcs_model_path", required=False, help="Path to the trained PCSs model")
     parser.add_argument("--pricing_policy", required=True, help="Pricing policy: QUADRATIC, ONLINE, or CONSTANT")
     parser.add_argument("--total_iterations", type=int, default=10, help="Total iterations for training")
     parser.add_argument("--train_timesteps_per_iteration", type=int, default=10000, help="Timesteps per iteration")

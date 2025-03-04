@@ -5,6 +5,7 @@ from energy_net.components.pcsunit import PCSUnit
 import logging
 import os
 import yaml
+import random
 
 class PCSManager:
     def __init__(self, num_agents: int, pcs_unit_config: dict, log_file: str):
@@ -107,7 +108,8 @@ class PCSManager:
                     logging.error(f"Error in PCS Agent {idx} prediction: {e}")
                     battery_action = 0
             else:
-                battery_action = 0
+                battery_action = 10 if (current_time%2) == 0 else -8
+                
 
             current_actions.append(battery_action)  
             current_levels.append(pcs_unit.battery.get_state()) 
