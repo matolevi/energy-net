@@ -30,7 +30,7 @@ python iso_game_main.py \
     --demand_pattern "SINUSOIDAL" \
     --cost_type "CONSTANT" \
     --num_pcs_agents 1 \
-    --total_iterations 30 \
+    --total_iterations 3 \
     --train_timesteps_per_iteration 5 \
     --eval_episodes 5 \
     --seed 576

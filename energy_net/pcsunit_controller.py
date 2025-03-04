@@ -104,21 +104,31 @@ class PCSUnitController:
         self.logger.info("Initialized PCSUnit with all components.")
 
         # Define observation and action spaces
-
         energy_config: Dict[str, Any] = self.pcs_unit_config['battery']['model_parameters']
+        obs_config = self.pcs_unit_config.get('observation_space', {})
+
+        # Get battery level bounds from battery config if specified
+        battery_level_config = obs_config.get('battery_level', {})
+        battery_min = energy_config['min'] if battery_level_config.get('min') == "from_battery_config" else battery_level_config.get('min', energy_config['min'])
+        battery_max = energy_config['max'] if battery_level_config.get('max') == "from_battery_config" else battery_level_config.get('max', energy_config['max'])
+
+        # Get other observation space bounds from config
+        time_config = obs_config.get('time', {})
+        buy_price_config = obs_config.get('iso_buy_price', {})
+        sell_price_config = obs_config.get('iso_sell_price', {})
 
         self.observation_space: spaces.Box = spaces.Box(
             low=np.array([
-                energy_config['min'],
-                0.0,
-                0.0,
-                0.0
+                battery_min,
+                time_config.get('min', 0.0),
+                buy_price_config.get('min', 0.0),
+                sell_price_config.get('min', 0.0)
             ], dtype=np.float32),
             high=np.array([
-                energy_config['max'],
-                1.0,
-                100.0,
-                100.0
+                battery_max,
+                time_config.get('max', 1.0),
+                buy_price_config.get('max', 100.0),
+                sell_price_config.get('max', 100.0)
             ], dtype=np.float32),
             dtype=np.float32
         )
@@ -192,12 +202,13 @@ class PCSUnitController:
             except Exception as e:
                 self.logger.error(f"Failed to load ISO model: {e}")
         
+        # Initialize default ISO parameters from config
+        default_iso_params = self.pcs_unit_config.get('default_iso_params', {}).get('quadratic', {})
         self.buy_iso = QuadraticPricingISO(
-            buy_a=1,  
-            buy_b=2,    
-            buy_c=5.0
+            buy_a=default_iso_params.get('buy_a', 1.0),
+            buy_b=default_iso_params.get('buy_b', 2.0),
+            buy_c=default_iso_params.get('buy_c', 5.0)
         )
-
 
         self.logger.info("PCSunitEnv initialization complete.")
                 
@@ -489,17 +500,18 @@ class PCSUnitController:
         self.pcs_demand = net_exchange
         net_demand = self.realized_demand + net_exchange
         self.logger.debug(f"Net demand: {net_demand:.2f} MWh")
-        # Calculate dispatch and costs (matching ISO calculations)
+        
+        # Calculate dispatch cost using thresholds from config
         dispatch = self.predicted_demand
-        if (dispatch<=100):
-            dispatch_cost = 5.0 * dispatch
-        elif (100<dispatch<170):
-            dispatch_cost = 7.0 * dispatch
-        elif (170<=dispatch):
-            dispatch_cost = 8.0 * dispatch
-        else:
-            dispatch_cost = 0.0
-        #dispatch_cost = self.dispatch_price * dispatch
+        dispatch_cost = 0.0
+        dispatch_thresholds = self.pcs_unit_config.get('dispatch_cost', {}).get('thresholds', [])
+        
+        for threshold in dispatch_thresholds:
+            level = float('inf') if threshold['level'] == 'inf' else float(threshold['level'])
+            if dispatch <= level:
+                dispatch_cost = threshold['rate'] * dispatch
+                break
+
         shortfall = max(0.0, net_demand - dispatch)
         reserve_cost = self.reserve_price * shortfall
     

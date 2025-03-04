@@ -63,12 +63,35 @@ class ISOController:
         self.pcs_unit_config = self.load_config(pcs_unit_config_path)
 
         # Define observation and action spaces
+        obs_config = self.iso_config.get('observation_space', {})
+        time_config = obs_config.get('time', {})
+        demand_config = obs_config.get('predicted_demand', {})
+        pcs_config = obs_config.get('pcs_demand', {})
+
+        # Convert 'inf' strings from yaml to numpy.inf
+        def convert_inf(value):
+            if value == 'inf':
+                return np.inf
+            elif value == '-inf':
+                return -np.inf
+            return value
+
         self.observation_space = spaces.Box(
-            low=np.array([0.0, 0.0, -np.inf], dtype=np.float32),  # [time, predicted_demand, pcs_demand]
-            high=np.array([1.0, np.inf, np.inf], dtype=np.float32),
+            low=np.array([
+                time_config.get('min', 0.0),
+                demand_config.get('min', 0.0),
+                convert_inf(pcs_config.get('min', -np.inf))
+            ], dtype=np.float32),
+            high=np.array([
+                time_config.get('max', 1.0),
+                convert_inf(demand_config.get('max', np.inf)),
+                convert_inf(pcs_config.get('max', np.inf))
+            ], dtype=np.float32),
             dtype=np.float32
         )
         
+        self.logger.info(f"Observation space initialized with bounds: low={self.observation_space.low}, high={self.observation_space.high}")
+
         # Define price bounds from ISO config
         pricing_config = self.iso_config.get('pricing', {})
         price_params = pricing_config.get('parameters', {})

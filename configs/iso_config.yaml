@@ -28,6 +28,18 @@ action_spaces:
       min: 0.0
       max: 300.0
 
+# Observation space configuration
+observation_space:
+  time:
+    min: 0.0
+    max: 1.0
+  predicted_demand:
+    min: 0.0
+    max: inf  # represents np.inf
+  pcs_demand:
+    min: -inf  # represents -np.inf
+    max: inf   # represents np.inf
+
 # Specifies which ISO implementation to use
 type: "HourlyPricingISO"
 
