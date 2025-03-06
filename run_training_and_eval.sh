@@ -26,7 +26,7 @@ fi
 python iso_game_main.py \
     --algo_type "PPO" \
     --pricing_policy "CONSTANT" \
-    --demand_pattern "DOUBLE_PEAK" \
+    --demand_pattern "SINUSOIDAL" \
     --cost_type "CONSTANT" \
     --num_pcs_agents 1 \
     --total_iterations 1 \
