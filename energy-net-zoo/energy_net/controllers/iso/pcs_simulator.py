@@ -1,0 +1,242 @@
+from typing import Dict, Any, Optional, List, Tuple
+import numpy as np
+import logging
+from energy_net.market.iso.pcs_manager import PCSManager
+
+class PCSSimulator:
+    """
+    Handles the simulation of PCS (Power Consumption & Storage) units for the ISO controller.
+    
+    This class is responsible for:
+    1. Managing the PCS units and their responses to market conditions
+    2. Simulating the behavior of PCS units with or without trained agents
+    3. Aggregating production, consumption, and demand from all PCS units
+    4. Tracking battery levels and actions across time steps
+    
+    By extracting this logic from the ISO controller, we create a cleaner separation of concerns
+    and make the PCS simulation aspects more maintainable and testable.
+    """
+    
+    def __init__(
+        self, 
+        num_pcs_agents: int, 
+        pcs_unit_config: Dict[str, Any], 
+        log_file: str, 
+        logger: Optional[logging.Logger] = None
+    ):
+        """
+        Initialize the PCS simulator.
+        
+        Args:
+            num_pcs_agents: Number of PCS agents to simulate
+            pcs_unit_config: Configuration for PCS units
+            log_file: Path to the log file
+            logger: Logger instance for logging PCS simulation details
+        """
+        self.logger = logger
+        self.pcs_unit_config = pcs_unit_config
+        
+        # Initialize the PCSManager with the given configuration
+        self.pcs_manager = PCSManager(
+            num_agents=num_pcs_agents,
+            pcs_unit_config=pcs_unit_config,
+            log_file=log_file
+        )
+        
+        # Initialize trained agent reference
+        self.trained_pcs_agent = None
+        
+        if self.logger:
+            self.logger.info(f"Initialized PCS simulator with {num_pcs_agents} agents")
+    
+    def set_trained_agent(self, agent_idx: int, model_path: str) -> bool:
+        """
+        Set a trained agent for a specific PCS unit.
+        
+        Args:
+            agent_idx: Index of the PCS unit to set the agent for
+            model_path: Path to the trained agent model
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        success = self.pcs_manager.set_trained_agent(agent_idx, model_path)
+        
+        if success and agent_idx == 0:  # Store reference to first agent for compatibility
+            self.trained_pcs_agent = self.pcs_manager.agents[agent_idx].trained_agent
+        
+        if self.logger:
+            if success:
+                self.logger.info(f"Successfully set trained agent {agent_idx} from {model_path}")
+            else:
+                self.logger.error(f"Failed to set trained agent {agent_idx} from {model_path}")
+                
+        return success
+    
+    def translate_to_pcs_observation(self, current_time: float, pcs_idx: int = 0) -> np.ndarray:
+        """
+        Converts current state to PCS observation format for a specific PCS unit.
+        
+        Args:
+            current_time: Current time as a fraction of day
+            pcs_idx: Index of the PCS unit (default: 0 for first unit)
+            
+        Returns:
+            np.ndarray: Observation array containing:
+                - Current battery level
+                - Time of day
+                - Current production
+                - Current consumption
+        """
+        if pcs_idx >= len(self.pcs_manager.agents):
+            if self.logger:
+                self.logger.error(f"PCS index {pcs_idx} out of range (max: {len(self.pcs_manager.agents)-1})")
+            # Return zeros as fallback
+            return np.zeros(4, dtype=np.float32)
+            
+        pcs_unit = self.pcs_manager.agents[pcs_idx]
+        
+        pcs_observation = np.array([
+            pcs_unit.battery.get_state(),
+            current_time,
+            pcs_unit.get_self_production(),
+            pcs_unit.get_self_consumption()
+        ], dtype=np.float32)
+        
+        if self.logger:
+            self.logger.debug(
+                f"PCS Observation (unit {pcs_idx}):\n"
+                f"  Battery Level: {pcs_observation[0]:.2f} MWh\n"
+                f"  Time: {pcs_observation[1]:.3f}\n"
+                f"  Production: {pcs_observation[2]:.2f} MWh\n"
+                f"  Consumption: {pcs_observation[3]:.2f} MWh"
+            )
+        
+        return pcs_observation
+    
+    def simulate_pcs_response(self, observation: np.ndarray, pcs_idx: int = 0) -> float:
+        """
+        Simulates a specific PCS unit's response to current market conditions.
+        
+        Args:
+            observation (np.ndarray): Current state observation for PCS unit
+            pcs_idx: Index of the PCS unit to simulate (default: 0 for first unit)
+            
+        Returns:
+            float: Battery action (positive for charging, negative for discharging)
+        """
+        if pcs_idx >= len(self.pcs_manager.agents):
+            if self.logger:
+                self.logger.error(f"PCS index {pcs_idx} out of range (max: {len(self.pcs_manager.agents)-1})")
+            return 0.0
+            
+        # Get the trained agent for this PCS unit
+        agent = self.pcs_manager.agents[pcs_idx].trained_agent
+            
+        if agent is None:
+            if self.logger:
+                self.logger.warning(f"No trained agent available for PCS unit {pcs_idx} - simulating default charging behavior")
+                print(self.pcs_unit_config['battery']['model_parameters']['charge_rate_max'])
+                print("debug")
+            return self.pcs_unit_config['battery']['model_parameters']['charge_rate_max']
+            
+        if self.logger:
+            self.logger.debug(f"Sending observation to PCS agent {pcs_idx}: {observation}")
+            
+        action, _ = agent.predict(observation, deterministic=True)
+        battery_action = action.item()
+        
+        energy_config = self.pcs_unit_config['battery']['model_parameters']
+        if self.logger:
+            self.logger.info(
+                f"PCS Response (unit {pcs_idx}):\n"
+                f"  Battery Action: {battery_action:.2f} MWh\n"
+                f"  Max Charge: {energy_config['charge_rate_max']:.2f} MWh\n"
+                f"  Max Discharge: {energy_config['discharge_rate_max']:.2f} MWh"
+            )
+            
+        return battery_action
+    
+    def simulate_response(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Simulate the response of all PCS units to the current market conditions.
+        
+        Args:
+            state: Dictionary containing the current state
+                Required keys:
+                - current_time: Current time as a fraction of day
+                - iso_buy_price: Current ISO buy price
+                - iso_sell_price: Current ISO sell price
+                
+        Returns:
+            Dictionary containing simulation results:
+                - production: Total production from all PCS units
+                - consumption: Total consumption from all PCS units
+                - pcs_demand: Net demand from all PCS units (positive for buying, negative for selling)
+                - battery_levels: Current battery levels of all PCS units
+                - battery_actions: Current battery actions of all PCS units
+        """
+        # Extract required values
+        current_time = state['current_time']
+        iso_buy_price = state['iso_buy_price']
+        iso_sell_price = state['iso_sell_price']
+        
+        # Log the market conditions
+        if self.logger:
+            self.logger.debug(
+                f"Simulating PCS response to market conditions:\n"
+                f"  Time: {current_time:.3f}\n"
+                f"  ISO Buy Price: {iso_buy_price:.2f}\n"
+                f"  ISO Sell Price: {iso_sell_price:.2f}"
+            )
+        
+        # Simulate the step using the PCSManager
+        production, consumption, pcs_demand = self.pcs_manager.simulate_step(
+            current_time=current_time,
+            iso_buy_price=iso_buy_price,
+            iso_sell_price=iso_sell_price
+        )
+        
+        # Log the simulation results
+        if self.logger:
+            self.logger.info(
+                f"PCS Simulation Results:\n"
+                f"  Production: {production:.2f} MWh\n"
+                f"  Consumption: {consumption:.2f} MWh\n"
+                f"  Net Demand: {pcs_demand:.2f} MWh"
+            )
+        
+        # Get battery levels and actions
+        battery_levels = self.pcs_manager.battery_levels[-1] if self.pcs_manager.battery_levels else []
+        battery_actions = self.pcs_manager.battery_actions[-1] if self.pcs_manager.battery_actions else []
+        
+        return {
+            'production': production,
+            'consumption': consumption,
+            'pcs_demand': pcs_demand,
+            'battery_levels': battery_levels,
+            'battery_actions': battery_actions
+        }
+    
+    def reset(self) -> None:
+        """
+        Reset all PCS units to their initial state.
+        """
+        self.pcs_manager.reset_all()
+        
+        if self.logger:
+            self.logger.info("Reset all PCS units to initial state")
+            
+    def get_current_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of all PCS units.
+        
+        Returns:
+            Dictionary containing the current state:
+                - battery_levels: Current battery levels of all PCS units
+                - battery_actions: Most recent battery actions of all PCS units
+        """
+        return {
+            'battery_levels': self.pcs_manager.battery_levels[-1] if self.pcs_manager.battery_levels else [],
+            'battery_actions': self.pcs_manager.battery_actions[-1] if self.pcs_manager.battery_actions else []
+        } 
