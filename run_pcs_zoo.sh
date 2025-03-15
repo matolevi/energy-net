@@ -54,7 +54,7 @@ mkdir -p models/pcs_zoo
 
 # Run training
 echo "Starting training with ${ALGO}..."
-python train_pcs_zoo.py \
+python3 train_pcs_zoo.py \
     --algo "${ALGO}" \
     --env "${ENV}" \
     --demand-pattern "${DEMAND_PATTERN}" \
@@ -79,7 +79,7 @@ if [ ${TRAIN_EXIT_CODE} -eq 0 ]; then
         exit 1
     fi
     
-    python eval_pcs_zoo.py \
+    python3 eval_pcs_zoo.py \
         --algo "${ALGO}" \
         --env "${ENV}" \
         --model-path "${MODEL_PATH}" \

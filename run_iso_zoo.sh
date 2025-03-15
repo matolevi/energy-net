@@ -111,7 +111,7 @@ echo "  Evaluation Episodes: $EVAL_EPISODES"
 echo "  Seed: $SEED"
 
 # Construct command
-COMMAND="python train_iso_zoo.py --algo $ALGO --env $ENV"
+COMMAND="python3 train_iso_zoo.py --algo $ALGO --env $ENV"
 COMMAND="$COMMAND --demand-pattern $DEMAND_PATTERN --cost-type $COST_TYPE"
 COMMAND="$COMMAND --pricing-policy $PRICING_POLICY --num-pcs-agents $NUM_PCS_AGENTS"
 COMMAND="$COMMAND --total-timesteps $TOTAL_TIMESTEPS --eval-freq $EVAL_FREQ"
@@ -152,7 +152,7 @@ echo "Training completed successfully!"
 ALGO_LOWER=$(echo "$ALGO" | tr '[:upper:]' '[:lower:]')
 
 # Construct evaluation command
-EVAL_COMMAND="python eval_iso_zoo.py --algo $ALGO --env $ENV"
+EVAL_COMMAND="python3 eval_iso_zoo.py --algo $ALGO --env $ENV"
 EVAL_COMMAND="$EVAL_COMMAND --model-path models/iso_zoo/$ALGO_LOWER/final_model_iso.zip"
 EVAL_COMMAND="$EVAL_COMMAND --normalizer-path models/iso_zoo/$ALGO_LOWER/final_model_normalizer.pkl"
 EVAL_COMMAND="$EVAL_COMMAND --demand-pattern $DEMAND_PATTERN --cost-type $COST_TYPE"

@@ -98,7 +98,7 @@ if [ ! -z "$STORAGE" ]; then
     STORAGE_ARGS="--storage $STORAGE"
 fi
 
-python optimize_iso_zoo.py \
+python3 optimize_iso_zoo.py \
     --algo $ALGO \
     --env $ENV \
     --n-trials $N_TRIALS \

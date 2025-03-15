@@ -55,7 +55,7 @@ The trained model is saved to `models/pcs_zoo/ppo/final_model_ppo.zip` and the n
 After training, evaluate your agent:
 
 ```bash
-python eval_pcs_zoo.py --algo ppo --env PCSUnitEnv-v0 --model-path models/pcs_zoo/ppo/final_model_ppo.zip --normalizer-path models/pcs_zoo/ppo/final_model_normalizer.pkl --demand-pattern SINUSOIDAL --cost-type CONSTANT --n-eval-episodes 1 --deterministic --output-dir eval_results/ppo_SINUSOIDAL_CONSTANT
+python3 eval_pcs_zoo.py --algo ppo --env PCSUnitEnv-v0 --model-path models/pcs_zoo/ppo/final_model_ppo.zip --normalizer-path models/pcs_zoo/ppo/final_model_normalizer.pkl --demand-pattern SINUSOIDAL --cost-type CONSTANT --n-eval-episodes 1 --deterministic --output-dir eval_results/ppo_SINUSOIDAL_CONSTANT
 ```
 
 This generates comprehensive evaluation metrics and visualizations in the specified output directory.
@@ -111,7 +111,7 @@ Alternatively, evaluation happens automatically at the end of training if you ru
 ### 3. Evaluation (`eval_pcs_zoo.py`)
 
 ```bash
-python eval_pcs_zoo.py [OPTIONS]
+python3 eval_pcs_zoo.py [OPTIONS]
 ```
 
 **Required Options:**
