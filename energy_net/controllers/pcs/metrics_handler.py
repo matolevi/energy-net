@@ -1,3 +1,20 @@
+"""
+PCS Metrics Handler Module
+
+This module handles all calculations related to rewards, costs, and metrics
+for the PCS controller. It encapsulates the complex logic of determining costs,
+revenues, and battery utilization metrics for the reinforcement learning agent.
+
+Key functions:
+1. Cost and revenue calculations based on market prices and grid exchange
+2. Reward computation based on configurable parameters
+3. Metrics tracking across episodes and steps
+4. Building info dictionaries for environment monitoring
+
+By isolating these calculations in a separate module, we improve modularity and testability
+of the PCS controller while keeping the core logic clean.
+"""
+
 from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
 import logging
@@ -7,11 +24,15 @@ class PCSMetricsHandler:
     """
     Handles metrics calculations for the PCS unit controller.
     
-    Responsibilities:
+    This class is responsible for:
     1. Tracking performance metrics over time
     2. Calculating rewards based on configured reward function
     3. Building info dictionaries for environment step returns
     4. Providing metrics visualization data
+    5. Maintaining episode statistics and summaries
+    
+    By extracting this logic from the PCS controller, we make the controller cleaner and more focused
+    on its core responsibilities, while making the metrics calculations more maintainable and testable.
     """
     
     def __init__(
@@ -24,9 +45,11 @@ class PCSMetricsHandler:
         Initialize the metrics handler.
         
         Args:
-            config: Configuration parameters
-            reward_function: The reward calculation function/object
-            logger: Optional logger for tracking metrics
+            config: Configuration parameters for metrics and rewards
+                May include settings for reward scaling, cost factors, etc.
+            reward_function: The reward calculation function/object that implements
+                             the BaseReward interface
+            logger: Optional logger for tracking metrics and debugging information
         """
         self.logger = logger
         self.config = config
@@ -63,11 +86,16 @@ class PCSMetricsHandler:
         """
         Calculate reward based on current state.
         
+        Computes the reward for the current step using the configured reward function
+        and the provided state information. This is typically called during the
+        environment's step method.
+        
         Args:
             info: State/info dictionary with all required fields for reward calculation
+                 such as battery level, market prices, production, consumption, etc.
             
         Returns:
-            Calculated reward
+            float: Calculated reward value
         """
         # Use the reward function to calculate reward
         reward = self.reward_function.compute_reward(info)
@@ -85,12 +113,17 @@ class PCSMetricsHandler:
         """
         Build info dictionary for step returns, enhancing with metrics tracking.
         
+        This method takes the current state and reward, tracks metrics over time,
+        and returns an enhanced info dictionary for the environment's step method.
+        It also updates internal metrics history for later analysis.
+        
         Args:
-            state: Current state dictionary
-            reward: Calculated reward
+            state: Current state dictionary containing environment variables
+            reward: Calculated reward for the current step
             
         Returns:
-            Enhanced info dictionary with metrics
+            Dict[str, Any]: Enhanced info dictionary with metrics, reward tracking,
+                           and cumulative statistics
         """
         # Start with the existing state info
         info = state.copy()
@@ -145,8 +178,18 @@ class PCSMetricsHandler:
         """
         Get summary statistics of tracked metrics.
         
+        Calculates and returns summary statistics for the current episode,
+        including mean, standard deviation, min, and max values for reward
+        and other key metrics.
+        
         Returns:
-            Dictionary with summary statistics
+            Dictionary containing:
+            - mean_reward: Average reward per step
+            - std_reward: Standard deviation of rewards
+            - min_reward: Minimum reward received
+            - max_reward: Maximum reward received
+            - total_reward: Cumulative reward for the episode
+            - steps: Total steps taken
         """
         if not self.metrics_history['rewards']:
             return {
@@ -173,14 +216,22 @@ class PCSMetricsHandler:
         """
         Get complete metrics history.
         
+        Returns the full history of all tracked metrics, which can be used
+        for detailed analysis and visualization of agent performance.
+        
         Returns:
-            Dictionary with all metrics history
+            Dictionary with all metrics history as lists of values
         """
         return self.metrics_history
     
     def end_episode(self) -> Dict[str, Any]:
         """
         Mark the end of an episode and return summary statistics.
+        
+        This method should be called at the end of each episode to:
+        1. Update episode count
+        2. Log episode summary statistics
+        3. Prepare summary metrics for external use
         
         Returns:
             Dictionary with episode summary statistics
@@ -201,6 +252,9 @@ class PCSMetricsHandler:
     def reset(self) -> None:
         """
         Reset metrics tracking for a new episode.
+        
+        Clears all tracked metrics and resets counters for a new episode,
+        while preserving the episode count for continuity.
         """
         # Preserve episode count but reset everything else
         self.total_reward = 0.0
@@ -210,4 +264,4 @@ class PCSMetricsHandler:
             self.metrics_history[key] = []
             
         if self.logger:
-            self.logger.info(f"Metrics handler reset for episode {self.episode_count + 1}") 
+            self.logger.info(f"Metrics handler reset for episode {self.episode_count + 1}")

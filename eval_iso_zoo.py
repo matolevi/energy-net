@@ -1,3 +1,28 @@
+"""
+Independent System Operator (ISO) Evaluation Script
+
+This script provides comprehensive evaluation tools for trained ISO agents.
+It evaluates the agent's performance, collects detailed metrics, and generates
+visualizations to help understand the agent's behavior and decision-making.
+
+Key evaluation metrics include:
+- Overall reward performance
+- Energy dispatch and demand matching
+- Price setting strategies
+- Cost breakdown by component
+- Grid stability metrics
+- PCS agent response
+
+The script generates both quantitative metrics and visualizations that can be
+saved to a specified output directory for detailed analysis.
+
+Usage:
+    python eval_iso_zoo.py --algo ppo --env ISOEnv-v0 --model-path models/iso_zoo/ppo/final_model_iso.zip
+                          --pricing-policy ONLINE --normalizer-path models/iso_zoo/ppo/final_model_normalizer.pkl
+                          --output-dir eval_results/ppo_iso
+
+"""
+
 import os
 import argparse
 import gymnasium as gym
@@ -18,8 +43,14 @@ from energy_net.env import PricingPolicy
 from gymnasium.wrappers import RescaleAction
 
 def parse_args():
-    """Parse command line arguments for ISO evaluation"""
-    parser = argparse.ArgumentParser()
+    """
+    Parse command line arguments for ISO agent evaluation.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments including model paths,
+        evaluation settings, environment configuration, and dispatch settings.
+    """
+    parser = argparse.ArgumentParser(description="Evaluate a trained ISO agent")
     parser.add_argument("--algo", type=str, default="ppo", help="RL algorithm to evaluate")
     parser.add_argument("--env", type=str, default="ISOEnv-v0", help="Environment ID")
     parser.add_argument("--model-path", type=str, required=True, help="Path to the trained model")
@@ -39,21 +70,50 @@ def parse_args():
     parser.add_argument("--num-pcs-agents", type=int, default=1,
                        help="Number of PCS agents to simulate in the environment")
     parser.add_argument("--output-dir", type=str, default=None, help="Directory to save evaluation results")
+    parser.add_argument("--use-dispatch-action", action="store_true", default=False,
+                       help="Indicate that the trained model controls dispatch in addition to pricing. "
+                            "Must match the setting used during training.")
+    parser.add_argument("--dispatch-strategy", type=str, default="predicted_demand",
+                       choices=["predicted_demand", "fixed", "scaled", "manual_profile", "daily_pattern"],
+                       help="Strategy to use for dispatch when not agent-controlled: "
+                            "predicted_demand=use demand forecast, fixed=constant value, "
+                            "scaled=proportional to demand, manual_profile=predefined schedule")
+    parser.add_argument("--trained-pcs-model-path", type=str, default=None,
+                       help="Path to trained PCS model to use for PCS agent simulation")
     return parser.parse_args()
 
 def create_env(args):
-    """Create ISO evaluation environment"""
+    """
+    Create an ISO environment for evaluation with specified settings.
+    
+    Sets up the environment with the same configuration used during training,
+    including pricing policy, demand pattern, cost type, and dispatch settings.
+    
+    Args:
+        args: Command line arguments containing environment settings
+        
+    Returns:
+        callable: Function that creates and initializes an ISO environment for evaluation
+    """
     # Convert pricing_policy string to enum
     pricing_policy_enum = PricingPolicy[args.pricing_policy]
     
     def _init():
+        # Create a comprehensive dispatch configuration
+        dispatch_config = {
+            "use_dispatch_action": args.use_dispatch_action,  # Whether model was trained to control dispatch
+            "default_strategy": args.dispatch_strategy        # Alternative strategy if not agent-controlled
+        }
+        
         env = gym.make(
             args.env,
             render_mode="rgb_array",
             pricing_policy=pricing_policy_enum,
             demand_pattern=DemandPattern[args.demand_pattern],
             cost_type=CostType[args.cost_type],
-            num_pcs_agents=args.num_pcs_agents
+            num_pcs_agents=args.num_pcs_agents,
+            dispatch_config=dispatch_config,  # Pass dispatch configuration
+            trained_pcs_model_path=args.trained_pcs_model_path,  # Pass trained PCS model path
         )
         
         # Add action rescaling to match PCS pipeline
@@ -69,7 +129,19 @@ def create_env(args):
     return _init
 
 def plot_episode_results(episode_data, episode_idx, output_dir):
-    """Plot ISO performance metrics for a specific episode with formatting matching PCS plots"""
+    """
+    Generate visualization plots for a specific evaluation episode.
+    
+    Creates multiple plots:
+    1. Energy flows and prices over time
+    2. Cost components breakdown per time step
+    3. Final cost distribution across cost categories
+    
+    Args:
+        episode_data: Dictionary containing episode metrics
+        episode_idx: Episode index number
+        output_dir: Directory where plots will be saved
+    """
     # Create directory for plots if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
@@ -200,7 +272,28 @@ def plot_episode_results(episode_data, episode_idx, output_dir):
         print(f"Saved final cost distribution plot to {final_cost_path}")
 
 def collect_episode_data(env, model, deterministic=True):
-    """Collect data from a single episode for an ISO agent"""
+    """
+    Collect detailed data from a single evaluation episode.
+    
+    This function runs a complete episode using the trained model and collects
+    comprehensive performance metrics including:
+    - Agent actions (prices, dispatch decisions)
+    - Environmental state (demand, battery levels)
+    - Performance metrics (costs by category, rewards)
+    - System response (PCS behavior, grid balancing)
+    
+    The collected data is organized into a structured dictionary for analysis
+    and visualization.
+    
+    Args:
+        env: Evaluation environment
+        model: Trained ISO agent model
+        deterministic: Whether to use deterministic actions (recommended for evaluation)
+        
+    Returns:
+        dict: Dictionary containing all episode data including actions, state variables,
+              and performance metrics
+    """
     # Reset the environment and get initial state
     observation, _ = env.reset()
     done = False

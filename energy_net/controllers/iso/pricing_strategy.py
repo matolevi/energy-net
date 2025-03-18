@@ -1,3 +1,24 @@
+"""
+Pricing Strategy Module for ISO Controllers
+
+This module implements the Strategy pattern for different pricing policies used by the
+Independent System Operator (ISO). It defines a common interface for all pricing strategies
+and provides concrete implementations for:
+
+1. Online Pricing: Real-time price setting at each time step
+2. Quadratic Pricing: Polynomial-based pricing with coefficients set at the beginning
+3. Constant Pricing: Fixed pricing throughout the episode
+
+Each strategy handles:
+- Action space definition based on its policy
+- Processing agent actions into actual prices and dispatch
+- Validation of actions within price boundaries
+- Day-ahead vs. real-time action processing
+
+This design allows for easy extension to new pricing policies by implementing
+additional strategy classes.
+"""
+
 from typing import Dict, Any, Union, Tuple, List, Optional
 import numpy as np
 import logging
@@ -12,6 +33,10 @@ class PricingStrategy(ABC):
     
     This abstract class defines the interface for all pricing strategies.
     Each concrete strategy handles a specific pricing policy (Quadratic, Online, Constant).
+    
+    The Strategy pattern allows the ISO controller to use different pricing mechanisms
+    without changing its core logic, by delegating pricing decisions to the appropriate
+    strategy object.
     """
     
     def __init__(
@@ -36,10 +61,13 @@ class PricingStrategy(ABC):
         self.logger = logger
     
     @abstractmethod
-    def create_action_space(self) -> spaces.Space:
+    def create_action_space(self, use_dispatch_action: bool = False) -> spaces.Space:
         """
         Create the appropriate action space for this pricing strategy.
         
+        Args:
+            use_dispatch_action: Whether to include dispatch in the action space
+            
         Returns:
             A gymnasium Space object representing the action space
         """
@@ -50,8 +78,10 @@ class PricingStrategy(ABC):
         self, 
         action: Union[float, np.ndarray, int], 
         step_count: int,
-        first_action_taken: bool
-    ) -> Tuple[float, float, np.ndarray, bool]:
+        first_action_taken: bool,
+        predicted_demand: float = 0.0,
+        use_dispatch_action: bool = False
+    ) -> Tuple[float, float, float, bool]:
         """
         Process the agent's action according to the pricing strategy.
         
@@ -59,12 +89,14 @@ class PricingStrategy(ABC):
             action: The action taken by the agent
             step_count: The current step count in the episode
             first_action_taken: Whether the first action has been taken
+            predicted_demand: The predicted demand for the current step
+            use_dispatch_action: Whether dispatch is included in the action
             
         Returns:
             Tuple containing:
             - buy_price: Current buying price
             - sell_price: Current selling price
-            - dispatch: Current dispatch value
+            - dispatch: Current dispatch value (predicted_demand if not controlled by action)
             - first_action_taken: Updated first_action_taken flag
         """
         pass
@@ -73,7 +105,17 @@ class PricingStrategy(ABC):
 class QuadraticPricingStrategy(PricingStrategy):
     """
     Strategy for the Quadratic pricing policy.
-    This strategy uses polynomial coefficients to determine prices.
+    
+    This strategy uses polynomial coefficients to determine prices. The agent sets
+    coefficients for quadratic functions at the beginning of an episode (day-ahead),
+    and these coefficients are then used to calculate prices throughout the day
+    based on demand.
+    
+    Pricing Formula:
+        price = a * demand² + b * demand + c
+    
+    The agent sets the coefficients [a, b, c] for both buy and sell prices,
+    resulting in 6 total coefficients.
     """
     
     def __init__(
@@ -114,21 +156,30 @@ class QuadraticPricingStrategy(PricingStrategy):
         self.buy_iso = None
         self.sell_iso = None
     
-    def create_action_space(self) -> spaces.Space:
+    def create_action_space(self, use_dispatch_action: bool = False) -> spaces.Space:
         """
-        Create the action space for quadratic pricing.
+        Create the action space for quadratic pricing, optionally including dispatch.
         
+        Args:
+            use_dispatch_action: Whether to include dispatch in the action space
+            
         Returns:
-            A Box space with dimensions for polynomial coefficients and dispatch profile
+            A Box space with dimensions for polynomial coefficients and optionally dispatch profile
         """
-        low_array = np.concatenate((
-            np.full(6, self.low_poly, dtype=np.float32),
-            np.full(self.max_steps_per_episode, self.dispatch_min, dtype=np.float32)
-        ))
-        high_array = np.concatenate((
-            np.full(6, self.high_poly, dtype=np.float32),
-            np.full(self.max_steps_per_episode, self.dispatch_max, dtype=np.float32)
-        ))
+        if use_dispatch_action:
+            # Include dispatch profile in the action space
+            low_array = np.concatenate((
+                np.full(6, self.low_poly, dtype=np.float32),
+                np.full(self.max_steps_per_episode, self.dispatch_min, dtype=np.float32)
+            ))
+            high_array = np.concatenate((
+                np.full(6, self.high_poly, dtype=np.float32),
+                np.full(self.max_steps_per_episode, self.dispatch_max, dtype=np.float32)
+            ))
+        else:
+            # Only include pricing coefficients
+            low_array = np.full(6, self.low_poly, dtype=np.float32)
+            high_array = np.full(6, self.high_poly, dtype=np.float32)
                 
         return spaces.Box(
             low=low_array,
@@ -141,16 +192,31 @@ class QuadraticPricingStrategy(PricingStrategy):
         action: Union[float, np.ndarray, int], 
         step_count: int,
         first_action_taken: bool,
-        predicted_demand: float = 0.0
+        predicted_demand: float = 0.0,
+        use_dispatch_action: bool = False
     ) -> Tuple[float, float, float, bool]:
         """
         Process the agent's action according to the quadratic pricing strategy.
         
+        In the quadratic pricing model, actions are only processed on the first step
+        (day-ahead pricing). The action sets the polynomial coefficients that are then
+        used to calculate prices throughout the episode based on demand.
+        
+        Action format when use_dispatch_action is False:
+            [b0, b1, b2, s0, s1, s2]
+            - b0, b1, b2: Buy price polynomial coefficients
+            - s0, s1, s2: Sell price polynomial coefficients
+            
+        Action format when use_dispatch_action is True:
+            [b0, b1, b2, s0, s1, s2, dispatch_1, dispatch_2, ..., dispatch_n]
+            - Additional dispatch values define the dispatch profile for each time step
+            
         Args:
-            action: The action taken by the agent (polynomial coefficients + dispatch profile)
+            action: The action taken by the agent 
             step_count: The current step count in the episode
             first_action_taken: Whether the first action has been taken
             predicted_demand: The predicted demand for the current time step
+            use_dispatch_action: Whether dispatch is included in the action
             
         Returns:
             Tuple containing:
@@ -161,29 +227,47 @@ class QuadraticPricingStrategy(PricingStrategy):
         """
         iso_buy_price = 0.0
         iso_sell_price = 0.0
-        dispatch = 0.0
+        dispatch = predicted_demand  # Default to predicted demand if dispatch not provided
         
         if step_count == 1 and not first_action_taken:
             action = np.array(action).flatten()
-            expected_length = 6 + self.max_steps_per_episode
             
-            if len(action) != expected_length: 
-                if self.logger:
-                    self.logger.error(
+            if use_dispatch_action:
+                expected_length = 6 + self.max_steps_per_episode  # 6 polynomial coefficients + dispatch profile
+                if len(action) != expected_length: 
+                    if self.logger:
+                        self.logger.error(
+                            f"Expected action of length {expected_length}, "
+                            f"got {len(action)}"
+                        )
+                    raise ValueError(
                         f"Expected action of length {expected_length}, "
                         f"got {len(action)}"
                     )
-                raise ValueError(
-                    f"Expected action of length {expected_length}, "
-                    f"got {len(action)}"
-                )
+                
+                # Extract pricing coefficients and dispatch profile
+                self.buy_coef = action[0:3]    # [b0, b1, b2] 
+                self.sell_coef = action[3:6]   # [s0, s1, s2] 
+                self.dispatch_profile = action[6:]  # values for dispatch profile
+                self.dispatch_profile = np.clip(self.dispatch_profile, self.dispatch_min, self.dispatch_max)
+            else:
+                # Only extract the pricing coefficients
+                expected_length = 6  # 6 polynomial coefficients
+                if len(action) < expected_length:
+                    if self.logger:
+                        self.logger.error(
+                            f"Expected at least {expected_length} pricing coefficients, "
+                            f"got {len(action)}"
+                        )
+                    raise ValueError(
+                        f"Expected at least {expected_length} pricing coefficients, "
+                        f"got {len(action)}"
+                    )
+                
+                self.buy_coef = action[0:3]    # [b0, b1, b2] 
+                self.sell_coef = action[3:6]   # [s0, s1, s2]
             
-            self.buy_coef = action[0:3]    # [b0, b1, b2] 
-            self.sell_coef = action[3:6]   # [s0, s1, s2] 
-            self.dispatch_profile = action[6:]  # values for dispatch profile
-            self.dispatch_profile = np.clip(self.dispatch_profile, self.dispatch_min, self.dispatch_max)
-        
-
+            # Initialize ISO pricing objects
             self.buy_iso = QuadraticPricingISO(
                 buy_a=float(self.buy_coef[0]),
                 buy_b=float(self.buy_coef[1]), 
@@ -197,26 +281,31 @@ class QuadraticPricingStrategy(PricingStrategy):
 
             first_action_taken = True
             if self.logger:
-                self.logger.info(
-                    f"Day-ahead polynomial for BUY: {self.buy_coef}, "
-                    f"SELL: {self.sell_coef}, "
-                    f"Dispatch profile: {self.dispatch_profile}"
-                )
+                log_msg = f"Day-ahead polynomial for BUY: {self.buy_coef}, SELL: {self.sell_coef}"
+                if use_dispatch_action:
+                    log_msg += f", Dispatch profile: {self.dispatch_profile}"
+                self.logger.info(log_msg)
         else:
             if self.logger:
                 self.logger.debug("Ignoring action - day-ahead polynomial & dispatch are already set.")
         
-        buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': predicted_demand})
+        # Calculate prices using the polynomial coefficients
+        buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': predicted_demand}) if self.buy_iso else lambda x: 0
         iso_buy_price = max(buy_pricing_fn(1.0), 0)
 
-        sell_pricing_fn = self.sell_iso.get_pricing_function({'demand': predicted_demand})
+        sell_pricing_fn = self.sell_iso.get_pricing_function({'demand': predicted_demand}) if self.sell_iso else lambda x: 0
         iso_sell_price = max(sell_pricing_fn(1.0), 0)
         
-        if step_count > 0 and step_count <= len(self.dispatch_profile):
+        # Calculate dispatch based on policy
+        if use_dispatch_action and step_count > 0 and step_count <= len(self.dispatch_profile):
             dispatch = self.dispatch_profile[step_count - 1]
+        # Otherwise, use default dispatch (predicted demand)
         
         if self.logger:
-            self.logger.info(f"Step {step_count} - ISO Prices: Sell {iso_sell_price:.2f}, Buy {iso_buy_price:.2f}")
+            self.logger.info(
+                f"Step {step_count} - ISO Prices: Sell {iso_sell_price:.2f}, Buy {iso_buy_price:.2f}, "
+                f"Dispatch: {dispatch:.2f}"
+            )
         
         return iso_buy_price, iso_sell_price, dispatch, first_action_taken
 
@@ -224,7 +313,13 @@ class QuadraticPricingStrategy(PricingStrategy):
 class ConstantPricingStrategy(PricingStrategy):
     """
     Strategy for the Constant pricing policy.
-    This strategy uses constant prices for an entire episode.
+    
+    This strategy uses constant prices for an entire episode. The agent sets 
+    fixed buy and sell prices at the beginning of an episode (day-ahead),
+    and these prices remain unchanged throughout the day.
+    
+    This is the simplest pricing strategy and serves as a baseline for
+    comparison with more dynamic strategies.
     """
     
     def __init__(
@@ -265,21 +360,30 @@ class ConstantPricingStrategy(PricingStrategy):
         self.buy_iso = None
         self.sell_iso = None
     
-    def create_action_space(self) -> spaces.Space:
+    def create_action_space(self, use_dispatch_action: bool = False) -> spaces.Space:
         """
-        Create the action space for constant pricing.
+        Create the action space for constant pricing, optionally including dispatch.
         
+        Args:
+            use_dispatch_action: Whether to include dispatch in the action space
+            
         Returns:
-            A Box space with dimensions for constant buy/sell prices and dispatch profile
+            A Box space with dimensions for constant buy/sell prices and optionally dispatch profile
         """
-        low_array = np.concatenate((
-            np.array([self.min_price, self.min_price], dtype=np.float32),
-            np.full(self.max_steps_per_episode, self.dispatch_min, dtype=np.float32)
-        ))
-        high_array = np.concatenate((
-            np.array([self.max_price, self.max_price], dtype=np.float32),
-            np.full(self.max_steps_per_episode, self.dispatch_max, dtype=np.float32)
-        ))
+        if use_dispatch_action:
+            # Include dispatch profile in the action space
+            low_array = np.concatenate((
+                np.array([self.min_price, self.min_price], dtype=np.float32),
+                np.full(self.max_steps_per_episode, self.dispatch_min, dtype=np.float32)
+            ))
+            high_array = np.concatenate((
+                np.array([self.max_price, self.max_price], dtype=np.float32),
+                np.full(self.max_steps_per_episode, self.dispatch_max, dtype=np.float32)
+            ))
+        else:
+            # Only include constant prices
+            low_array = np.array([self.min_price, self.min_price], dtype=np.float32)
+            high_array = np.array([self.max_price, self.max_price], dtype=np.float32)
         
         return spaces.Box(
             low=low_array,
@@ -292,16 +396,18 @@ class ConstantPricingStrategy(PricingStrategy):
         action: Union[float, np.ndarray, int], 
         step_count: int,
         first_action_taken: bool,
-        predicted_demand: float = 0.0
+        predicted_demand: float = 0.0,
+        use_dispatch_action: bool = False
     ) -> Tuple[float, float, float, bool]:
         """
         Process the agent's action according to the constant pricing strategy.
         
         Args:
-            action: The action taken by the agent (constant buy/sell prices + dispatch profile)
+            action: The action taken by the agent (constant buy/sell prices + optional dispatch profile)
             step_count: The current step count in the episode
             first_action_taken: Whether the first action has been taken
             predicted_demand: The predicted demand for the current time step
+            use_dispatch_action: Whether dispatch is included in the action
             
         Returns:
             Tuple containing:
@@ -312,26 +418,43 @@ class ConstantPricingStrategy(PricingStrategy):
         """
         iso_buy_price = 0.0
         iso_sell_price = 0.0
-        dispatch = 0.0
+        dispatch = predicted_demand  # Default to predicted demand if dispatch not provided
         
         if step_count == 1 and not first_action_taken:
             action = np.array(action).flatten()
-            expected_length = 2 + self.max_steps_per_episode
             
-            if len(action) != expected_length:
-                if self.logger:
-                    self.logger.error(
+            if use_dispatch_action:
+                expected_length = 2 + self.max_steps_per_episode  # 2 constant prices + dispatch profile
+                if len(action) != expected_length:
+                    if self.logger:
+                        self.logger.error(
+                            f"Expected action of length {expected_length}, got {len(action)}"
+                        )
+                    raise ValueError(
                         f"Expected action of length {expected_length}, got {len(action)}"
                     )
-                raise ValueError(
-                    f"Expected action of length {expected_length}, got {len(action)}"
-                )
                 
-            self.const_buy = float(action[0])
-            self.const_sell = float(action[1])
-            self.dispatch_profile = action[2:]
-            self.dispatch_profile = np.clip(self.dispatch_profile, self.dispatch_min, self.dispatch_max)
+                # Extract constant prices and dispatch profile
+                self.const_buy = float(action[0])
+                self.const_sell = float(action[1])
+                self.dispatch_profile = action[2:]
+                self.dispatch_profile = np.clip(self.dispatch_profile, self.dispatch_min, self.dispatch_max)
+            else:
+                # Only extract constant prices
+                expected_length = 2  # 2 constant prices
+                if len(action) < expected_length:
+                    if self.logger:
+                        self.logger.error(
+                            f"Expected at least {expected_length} price values, got {len(action)}"
+                        )
+                    raise ValueError(
+                        f"Expected at least {expected_length} price values, got {len(action)}"
+                    )
+                
+                self.const_buy = float(action[0])
+                self.const_sell = float(action[1])
             
+            # Initialize ISO pricing objects
             self.buy_iso = QuadraticPricingISO(
                 buy_a=0.0,
                 buy_b=0.0,
@@ -345,26 +468,31 @@ class ConstantPricingStrategy(PricingStrategy):
             
             first_action_taken = True
             if self.logger:
-                self.logger.info(
-                    f"Day-ahead constant prices - BUY: {self.const_buy}, "
-                    f"SELL: {self.const_sell}, "
-                    f"Dispatch profile: {self.dispatch_profile}"
-                )
+                log_msg = f"Day-ahead constant prices - BUY: {self.const_buy}, SELL: {self.const_sell}"
+                if use_dispatch_action:
+                    log_msg += f", Dispatch profile: {self.dispatch_profile}"
+                self.logger.info(log_msg)
         else:
             if self.logger:
                 self.logger.debug("Ignoring action - day-ahead constant pricing & dispatch already set.")
         
+        # Calculate constant prices
         buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': predicted_demand}) if self.buy_iso else lambda x: 0
         iso_buy_price = buy_pricing_fn(1.0)
 
         sell_pricing_fn = self.sell_iso.get_pricing_function({'demand': predicted_demand}) if self.sell_iso else lambda x: 0
         iso_sell_price = sell_pricing_fn(1.0)
         
-        if step_count > 0 and step_count <= len(self.dispatch_profile):
+        # Calculate dispatch based on policy
+        if use_dispatch_action and step_count > 0 and step_count <= len(self.dispatch_profile):
             dispatch = self.dispatch_profile[step_count - 1]
+        # Otherwise, use default dispatch (predicted demand)
         
         if self.logger:
-            self.logger.info(f"Step {step_count} - ISO Prices: Sell {iso_sell_price:.2f}, Buy {iso_buy_price:.2f}")
+            self.logger.info(
+                f"Step {step_count} - ISO Prices: Sell {iso_sell_price:.2f}, Buy {iso_buy_price:.2f}, "
+                f"Dispatch: {dispatch:.2f}"
+            )
         
         return iso_buy_price, iso_sell_price, dispatch, first_action_taken
 
@@ -372,7 +500,18 @@ class ConstantPricingStrategy(PricingStrategy):
 class OnlinePricingStrategy(PricingStrategy):
     """
     Strategy for the Online pricing policy.
-    This strategy updates prices at each time step.
+    
+    This strategy allows the agent to update prices at each time step (real-time pricing).
+    It provides the most flexibility, allowing the ISO to respond immediately to changing
+    grid conditions.
+    
+    Action format when use_dispatch_action is False:
+        [buy_price, sell_price]
+        
+    Action format when use_dispatch_action is True:
+        [buy_price, sell_price, dispatch]
+    
+    Each action directly sets the prices (and optionally dispatch) for the current time step.
     """
     
     def __init__(
@@ -411,46 +550,69 @@ class OnlinePricingStrategy(PricingStrategy):
                 f"Sell Price [{self.sell_price_min}, {self.sell_price_max}]"
             )
     
-    def create_action_space(self) -> spaces.Space:
+    def create_action_space(self, use_dispatch_action: bool = False) -> spaces.Space:
         """
-        Create the action space for online pricing.
+        Create the action space for online pricing, optionally including dispatch.
         
+        Args:
+            use_dispatch_action: Whether to include dispatch in the action space
+            
         Returns:
-            A Box space with dimensions for buy/sell prices
+            A Box space with dimensions for buy/sell prices and optionally dispatch
         """
-        return spaces.Box(
-            low=np.array([self.buy_price_min, self.sell_price_min], dtype=np.float32),
-            high=np.array([self.buy_price_max, self.sell_price_max], dtype=np.float32),
-            dtype=np.float32
-        )
+        if use_dispatch_action:
+            # Include dispatch in the action space
+            return spaces.Box(
+                low=np.array([self.buy_price_min, self.sell_price_min, self.dispatch_min], dtype=np.float32),
+                high=np.array([self.buy_price_max, self.sell_price_max, self.dispatch_max], dtype=np.float32),
+                dtype=np.float32
+            )
+        else:
+            # Only include buy/sell prices
+            return spaces.Box(
+                low=np.array([self.buy_price_min, self.sell_price_min], dtype=np.float32),
+                high=np.array([self.buy_price_max, self.sell_price_max], dtype=np.float32),
+                dtype=np.float32
+            )
     
     def process_action(
         self, 
         action: Union[float, np.ndarray, int], 
         step_count: int,
         first_action_taken: bool,
-        predicted_demand: float = 0.0
+        predicted_demand: float = 0.0,
+        use_dispatch_action: bool = False
     ) -> Tuple[float, float, float, bool]:
         """
         Process the agent's action according to the online pricing strategy.
         
+        In the online pricing model, actions directly set the buy/sell prices
+        for the current time step, allowing for real-time price adjustments.
+        
+        Action format when use_dispatch_action is False:
+            [buy_price, sell_price]
+            
+        Action format when use_dispatch_action is True:
+            [buy_price, sell_price, dispatch]
+            
         Args:
-            action: The action taken by the agent (buy/sell prices)
+            action: The action taken by the agent
             step_count: The current step count in the episode
             first_action_taken: Whether the first action has been taken
             predicted_demand: The predicted demand for the current time step
+            use_dispatch_action: Whether dispatch is included in the action
             
         Returns:
             Tuple containing:
             - buy_price: Current buying price
             - sell_price: Current selling price
-            - dispatch: Current dispatch value (set to predicted_demand for online pricing)
+            - dispatch: Current dispatch value
             - first_action_taken: Updated first_action_taken flag
         """
         if self.logger:
             self.logger.info(f"Processing ISO action: {action}")
-            
-        dispatch = predicted_demand
+        
+        dispatch = predicted_demand  # Default to predicted demand if dispatch not provided
         
         if isinstance(action, np.ndarray):
             action = action.flatten()
@@ -458,29 +620,41 @@ class OnlinePricingStrategy(PricingStrategy):
             if self.logger:
                 self.logger.info(f"Converting scalar action to array: {action}")
             action = np.array([action, action])
-            
-        # Ensure the action is within bounds - we do this explicitly to guarantee bounds are respected
-        action = np.clip(
-            action,
-            np.array([self.buy_price_min, self.sell_price_min]),
-            np.array([self.buy_price_max, self.sell_price_max])
-        )
         
-        if self.logger:
-            self.logger.info(f"Clipped action: {action}")
+        if use_dispatch_action:
+            # Extract prices and dispatch from action
+            if len(action) >= 3:
+                # Format: [buy_price, sell_price, dispatch]
+                iso_buy_price = action[0]
+                iso_sell_price = action[1]
+                dispatch = action[2]
+            else:
+                if self.logger:
+                    self.logger.warning(f"Expected 3 values for action with dispatch, got {len(action)}. Using only prices.")
+                iso_buy_price = action[0]
+                iso_sell_price = action[1] if len(action) > 1 else action[0]
+        else:
+            # Extract only prices
+            iso_buy_price = action[0]
+            iso_sell_price = action[1] if len(action) > 1 else action[0]
             
-        iso_buy_price, iso_sell_price = action
-        
-        # Ensure prices are properly constrained
+        # Ensure the prices are within bounds
         iso_buy_price = float(np.clip(iso_buy_price, self.buy_price_min, self.buy_price_max))
         iso_sell_price = float(np.clip(iso_sell_price, self.sell_price_min, self.sell_price_max))
         
+        # Ensure dispatch is within bounds if provided
+        if use_dispatch_action:
+            dispatch = float(np.clip(dispatch, self.dispatch_min, self.dispatch_max))
+        
         if self.logger:
-            self.logger.info(
+            log_msg = (
                 f"Step {step_count} - ISO Prices: "
                 f"Buy {iso_buy_price:.2f} [{self.buy_price_min}-{self.buy_price_max}], "
                 f"Sell {iso_sell_price:.2f} [{self.sell_price_min}-{self.sell_price_max}]"
             )
+            if use_dispatch_action:
+                log_msg += f", Dispatch: {dispatch:.2f}"
+            self.logger.info(log_msg)
         
         return iso_buy_price, iso_sell_price, dispatch, first_action_taken
 
@@ -488,6 +662,11 @@ class OnlinePricingStrategy(PricingStrategy):
 class PricingStrategyFactory:
     """
     Factory class for creating pricing strategy instances.
+    
+    This factory implements the Factory pattern to create the appropriate
+    pricing strategy based on the pricing policy enum value. It encapsulates
+    the object creation logic and provides a clean interface for creating
+    strategy objects.
     """
     
     @staticmethod
@@ -543,4 +722,4 @@ class PricingStrategyFactory:
         else:
             if logger:
                 logger.error(f"Unsupported pricing policy: {pricing_policy}")
-            raise ValueError(f"Unsupported pricing policy: {pricing_policy}") 
+            raise ValueError(f"Unsupported pricing policy: {pricing_policy}")

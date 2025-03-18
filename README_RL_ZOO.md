@@ -1,6 +1,6 @@
 # Energy-Net RL Zoo: A Complete Guide
 
-This guide provides detailed instructions for training and evaluating reinforcement learning (RL) agents for Power Control Systems (PCS) using our RL Zoo integration.
+This guide provides detailed instructions for training and evaluating reinforcement learning (RL) agents for Power Consumption and Storage (PCS) units using our RL Zoo integration.
 
 ## Overview
 
@@ -42,7 +42,7 @@ Once hyperparameters are optimized, train a full agent:
 ```
 
 This command:
-- Trains a PPO agent
+- Trains a PPO agent for a Power Consumption and Storage (PCS) unit
 - Uses SINUSOIDAL demand pattern and CONSTANT cost type
 - Trains for 100,000 timesteps
 - Evaluates the agent every 10,000 timesteps using 5 episodes
@@ -126,6 +126,25 @@ python3 eval_pcs_zoo.py [OPTIONS]
 - `--n-eval-episodes N`: Number of evaluation episodes (default: 5)
 - `--deterministic`: Use deterministic actions (recommended)
 - `--output-dir DIR`: Output directory for evaluation results
+
+## Extended Environment Options
+
+For the Independent System Operator (ISO) environment (using `run_iso_zoo.sh`, `optimize_iso_zoo.sh`, and `eval_iso_zoo.py`), the following additional options are available:
+
+**Dispatch Control Options:**
+- `--use-dispatch-action`: Enable dispatch control in the agent's action space, allowing the ISO to control both pricing and dispatch decisions simultaneously
+- `--dispatch-strategy STRATEGY`: Strategy for dispatch when not controlled by agent actions (choices: "predicted_demand", "fixed", "scaled", "manual_profile", "daily_pattern")
+  - `predicted_demand`: Match dispatch to predicted demand (default)
+  - `fixed`: Use a constant dispatch value
+  - `scaled`: Scale predicted demand by a factor
+  - `manual_profile`: Use a predefined dispatch profile
+  - `daily_pattern`: Use a time-of-day based pattern
+
+**Agent Simulation Options:**
+- `--trained-pcs-model-path PATH`: Path to a trained PCS model to use for simulating consumer/prosumer behavior
+- `--num-pcs-agents N`: Number of Power Consumption and Storage units to simulate in the environment (default: 1)
+
+These additional options provide more control over the dispatch mechanism and allow for testing with simulated consumer behavior using pre-trained PCS models.
 
 ## Examples
 
@@ -215,4 +234,4 @@ After training, check the `eval_results/` directory for detailed visualizations 
 **Solution**: Try different hyperparameters or run the optimization process again with more trials.
 
 **Issue**: Out of memory errors.
-**Solution**: Reduce batch size or network size in the hyperparameters. 
+**Solution**: Reduce batch size or network size in the hyperparameters.

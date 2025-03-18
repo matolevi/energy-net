@@ -1,3 +1,21 @@
+"""
+ISO Metrics Handler Module
+
+This module handles all calculations related to grid state, costs, rewards, and metrics
+for the ISO controller. It encapsulates the complex logic of determining grid performance,
+calculating costs associated with different operations, and computing rewards for the
+reinforcement learning agent.
+
+Key functions:
+1. Grid state calculation (demand realization, shortfall determination)
+2. Cost component calculations (dispatch costs, reserve costs, PCS exchange costs)
+3. Reward computation based on configurable parameters
+4. Info dictionary building for tracking and visualization
+
+By isolating these calculations in a separate module, we improve modularity and testability
+of the ISO controller while keeping the core logic clean.
+"""
+
 from typing import Dict, Any, Optional
 import numpy as np
 import logging
@@ -23,7 +41,11 @@ class ISOMetricsHandler:
         
         Args:
             config: Dictionary containing environment configuration
-            reward_calculator: The reward calculator instance
+                Expected keys include:
+                - dispatch_price: Cost per unit of dispatched energy
+                - reserve_price: Cost per unit of reserve energy needed
+                - demand_uncertainty: Dictionary with sigma parameter for demand noise
+            reward_calculator: The reward calculator instance that computes agent rewards
             logger: Logger instance for logging metrics
         """
         self.config = config
@@ -42,6 +64,18 @@ class ISOMetricsHandler:
         """
         Calculate grid state, costs, and metrics based on the current state.
         
+        This method performs the following calculations:
+        1. Applies random noise to predicted demand to simulate forecast uncertainty
+        2. Calculates net demand by combining realized demand and PCS demand
+        3. Determines shortfall (when net demand exceeds dispatch)
+        4. Calculates component costs (dispatch, reserve, PCS exchange)
+        5. Computes reward using the reward calculator
+        6. Builds a comprehensive info dictionary for monitoring and visualization
+        
+        The calculations follow the principles of power grid operations, where dispatch
+        decisions are made based on demand forecasts, and reserve power addresses
+        any shortfall at a premium cost.
+        
         Args:
             state: Dictionary containing the current state variables
                 Required keys:
@@ -51,6 +85,8 @@ class ISOMetricsHandler:
                 - iso_sell_price: Current ISO sell price
                 - dispatch: Current dispatch level
                 - count: Current step count
+                - current_time: Current simulation time
+                Optional keys:
                 - production: Current production
                 - consumption: Current consumption
                 - battery_level: Current battery level
@@ -62,6 +98,8 @@ class ISOMetricsHandler:
                 - info: Info dictionary for the step function
                 - realized_demand: Realized demand (predicted + noise)
                 - shortfall: Amount by which net demand exceeds dispatch
+                - dispatch_price: Price per unit of dispatched power
+                - reserve_price: Price per unit of reserve power
         """
         # Extract required values from state
         predicted_demand = state['predicted_demand']
@@ -166,4 +204,4 @@ class ISOMetricsHandler:
             'shortfall': shortfall,
             'dispatch_price': self.dispatch_price,
             'reserve_price': self.reserve_price
-        } 
+        }

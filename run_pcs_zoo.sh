@@ -1,4 +1,24 @@
 #!/bin/bash
+# ===============================================================================
+# Power Consumption and Storage (PCS) Training Script
+# ===============================================================================
+#
+# This script provides a convenient command-line interface for training PCS agents.
+# It handles parameter parsing, environment setup, and initiates both training
+# and evaluation of PCS agents.
+#
+# The PCS agent learns to:
+# - Optimize battery charging/discharging timing
+# - Respond to electricity price signals
+# - Balance self-produced energy with consumption needs
+# - Minimize electricity costs or maximize revenue
+#
+# This script supports multiple algorithms (PPO, A2C, SAC, TD3) and
+# configuration options for environment settings.
+#
+# Usage:
+#   ./run_pcs_zoo.sh --algo PPO --demand-pattern SINUSOIDAL --cost-type CONSTANT
+# ===============================================================================
 
 # Enable debug output and error handling
 set -x
@@ -18,26 +38,32 @@ SEED=42
 while [[ $# -gt 0 ]]; do
     case $1 in
         --algo)
+            # Algorithm to use for training (PPO, A2C, SAC, TD3)
             ALGO=$(echo "$2" | tr '[:upper:]' '[:lower:]')
             shift 2
             ;;
         --demand-pattern)
+            # Pattern of demand variation (SINUSOIDAL, RANDOM, PERIODIC, SPIKES)
             DEMAND_PATTERN="$2"
             shift 2
             ;;
         --cost-type)
+            # Cost structure (CONSTANT, VARIABLE, TIME_OF_USE)
             COST_TYPE="$2"
             shift 2
             ;;
         --total-timesteps)
+            # Total number of timesteps to train for
             TOTAL_TIMESTEPS="$2"
             shift 2
             ;;
         --eval-episodes)
+            # Number of episodes for evaluation
             EVAL_EPISODES="$2"
             shift 2
             ;;
         --seed)
+            # Random seed for reproducibility
             SEED="$2"
             shift 2
             ;;
@@ -100,4 +126,4 @@ if [ ${TRAIN_EXIT_CODE} -eq 0 ]; then
 else
     echo "Training failed with code ${TRAIN_EXIT_CODE}"
     exit 1
-fi 
+fi

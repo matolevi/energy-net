@@ -1,3 +1,28 @@
+"""
+Independent System Operator (ISO) Hyperparameter Optimization
+
+This script implements hyperparameter optimization for ISO agents using Optuna.
+It systematically searches for optimal hyperparameter configurations for the specified
+RL algorithm to maximize the performance of ISO agents in grid management.
+
+The optimization process:
+1. Creates a search space for hyperparameters based on the selected algorithm
+2. Trains multiple agents with different hyperparameter configurations
+3. Evaluates each configuration's performance
+4. Uses Bayesian optimization to guide the search toward promising regions
+5. Saves the best hyperparameters for future use
+
+Key hyperparameters optimized include:
+- Learning rates
+- Network architecture
+- Training parameters (batch size, epochs, etc.)
+- Algorithm-specific parameters
+
+Usage:
+    python optimize_iso_zoo.py --algo PPO --pricing-policy ONLINE --n-trials 100
+
+"""
+
 import os
 import argparse
 import optuna
@@ -21,7 +46,14 @@ from energy_net.market.iso.cost_types import CostType
 from energy_net.env import PricingPolicy
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    """
+    Parse command line arguments for ISO hyperparameter optimization.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments including algorithm selection,
+        optimization settings, environment configuration, and dispatch settings.
+    """
+    parser = argparse.ArgumentParser(description="Optimize hyperparameters for ISO RL agents")
     parser.add_argument("--algo", type=str, default="ppo", help="RL algorithm to use")
     parser.add_argument("--env", type=str, default="ISOEnv-v0", help="Environment to use")
     parser.add_argument("--n-trials", type=int, default=100, help="Number of trials")
@@ -41,29 +73,72 @@ def parse_args():
                         help="Pricing policy to use")
     parser.add_argument("--num-pcs-agents", type=int, default=1,
                         help="Number of PCS agents to simulate in the environment")
+    parser.add_argument("--use-dispatch-action", action="store_true", default=False,
+                        help="Enable dispatch control in the agent's action space, expanding the "
+                             "learning task to include both pricing and dispatch decisions")
+    parser.add_argument("--dispatch-strategy", type=str, default="predicted_demand",
+                        choices=["predicted_demand", "fixed", "scaled", "manual_profile", "daily_pattern"],
+                        help="Default strategy for dispatch when not controlled by agent: "
+                             "predicted_demand=match demand prediction, fixed=constant value, "
+                             "scaled=apply scaling factor to demand, manual_profile=use defined profile")
+    parser.add_argument("--trained-pcs-model-path", type=str, default=None,
+                        help="Path to trained PCS model to use for PCS agent simulation")
     return parser.parse_args()
 
 def sample_ppo_params(trial: optuna.Trial) -> Dict[str, Any]:
     """
-    Sample PPO hyperparameters
+    Sample hyperparameters for PPO algorithm using Optuna.
+    
+    This function defines the search space for Proximal Policy Optimization 
+    hyperparameters, including optimization parameters, neural network architecture,
+    and algorithm-specific settings.
+    
+    The search space is based on recommended ranges from literature and empirical testing.
+    
+    Args:
+        trial: Current Optuna trial
+        
+    Returns:
+        Dict[str, Any]: Dictionary of sampled hyperparameters
     """
+    # Sample batch size from 32 to 256
     batch_size = trial.suggest_int("batch_size", 32, 256)
+    
+    # Sample n_steps (horizon length) from 16 to 2048
     n_steps = trial.suggest_int("n_steps", 16, 2048)
+    
+    # Sample discount factor (gamma) from 0.9 to 0.9999
     gamma = trial.suggest_float("gamma", 0.9, 0.9999)
+    
+    # Sample learning rate on log scale
     learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
+    
+    # Sample entropy coefficient on log scale
+    # Controls exploration vs exploitation trade-off
     ent_coef = trial.suggest_float("ent_coef", 0.00000001, 0.1, log=True)
+    
+    # Sample clip range for PPO algorithm
     clip_range = trial.suggest_float("clip_range", 0.1, 0.4)
+    
+    # Sample number of PPO epochs
     n_epochs = trial.suggest_int("n_epochs", 3, 10)
+    
+    # Sample GAE lambda for advantage estimation
     gae_lambda = trial.suggest_float("gae_lambda", 0.9, 0.999)
+    
+    # Sample max gradient norm for gradient clipping
     max_grad_norm = trial.suggest_float("max_grad_norm", 0.3, 5.0)
+    
+    # Sample value function coefficient
     vf_coef = trial.suggest_float("vf_coef", 0.1, 1.0)
     
-    # Network architecture
-    pi_h1 = trial.suggest_int("pi_h1", 32, 128)
-    pi_h2 = trial.suggest_int("pi_h2", 32, 128)
-    vf_h1 = trial.suggest_int("vf_h1", 32, 128)
-    vf_h2 = trial.suggest_int("vf_h2", 32, 128)
+    # Sample neural network architecture
+    pi_h1 = trial.suggest_int("pi_h1", 32, 128)  # Policy network first hidden layer
+    pi_h2 = trial.suggest_int("pi_h2", 32, 128)  # Policy network second hidden layer
+    vf_h1 = trial.suggest_int("vf_h1", 32, 128)  # Value function first hidden layer
+    vf_h2 = trial.suggest_int("vf_h2", 32, 128)  # Value function second hidden layer
     
+    # Return complete hyperparameter dictionary
     return {
         "n_steps": n_steps,
         "batch_size": batch_size,
@@ -80,7 +155,7 @@ def sample_ppo_params(trial: optuna.Trial) -> Dict[str, Any]:
                 {"pi": [pi_h1, pi_h2], "vf": [vf_h1, vf_h2]}
             ]
         },
-        "policy": "MlpPolicy"
+        "policy": "MlpPolicy"  # Use MLP-based policy
     }
 
 def sample_a2c_params(trial: optuna.Trial) -> Dict[str, Any]:
@@ -203,18 +278,37 @@ HYPERPARAMS_SAMPLER = {
 }
 
 def create_env(args):
-    """Create the ISO environment with specified configurations"""
+    """
+    Create the ISO environment with specified configurations for optimization.
+    
+    Sets up the environment with the appropriate pricing policy, demand pattern,
+    cost type, and dispatch configuration.
+    
+    Args:
+        args: Command line arguments containing environment settings
+        
+    Returns:
+        callable: Function that creates and initializes an ISO environment for optimization
+    """
     # Convert pricing_policy string to enum
     pricing_policy_enum = PricingPolicy[args.pricing_policy]
     
     def _init():
+        # Create a dispatch configuration dict with comprehensive settings
+        dispatch_config = {
+            "use_dispatch_action": args.use_dispatch_action,  # Agent controls dispatch when True
+            "default_strategy": args.dispatch_strategy        # Strategy used when not agent-controlled
+        }
+        
         env = gym.make(
             args.env,
             render_mode="rgb_array",
             pricing_policy=pricing_policy_enum,
             demand_pattern=DemandPattern[args.demand_pattern],
             cost_type=CostType[args.cost_type],
-            num_pcs_agents=args.num_pcs_agents
+            num_pcs_agents=args.num_pcs_agents,
+            dispatch_config=dispatch_config,  # Pass dispatch configuration
+            trained_pcs_model_path=args.trained_pcs_model_path,  # Pass trained PCS model path
         )
         env = Monitor(env)
         return env
@@ -232,15 +326,35 @@ def process_hyperparameters(hyperparams: Dict[str, Any]) -> Dict[str, Any]:
     return hyperparams
 
 def objective(trial: optuna.Trial, args) -> float:
-    """Optimization objective for the ISO environment"""
+    """
+    Optimization objective function for Optuna trials.
+    
+    This function serves as the objective function for hyperparameter optimization:
+    1. Samples hyperparameters from the appropriate algorithm-specific sampler
+    2. Creates environments for training and evaluation
+    3. Trains an agent with the sampled hyperparameters
+    4. Evaluates performance and returns the mean reward as optimization objective
+    
+    Args:
+        trial: Current Optuna trial that provides hyperparameter suggestions
+        args: Command line arguments containing fixed experiment settings
+        
+    Returns:
+        float: Mean evaluation reward (higher is better)
+        
+    Raises:
+        ValueError: If the specified algorithm is not supported
+    """
+    # === SETUP PHASE ===
+    # Get algorithm name and validate it's supported
     algo = args.algo.lower()
     if algo not in HYPERPARAMS_SAMPLER:
         raise ValueError(f"Algorithm {algo} not supported! Try: {list(HYPERPARAMS_SAMPLER.keys())}")
     
-    # Sample hyperparameters
+    # Sample hyperparameters for this trial
     hyperparams = HYPERPARAMS_SAMPLER[algo](trial)
     
-    # Process hyperparameters
+    # Process hyperparameters (convert string representations to objects)
     hyperparams = process_hyperparameters(hyperparams)
     
     # Setup learning rate schedule if needed
@@ -248,54 +362,64 @@ def objective(trial: optuna.Trial, args) -> float:
         schedule_fn = get_schedule_fn(hyperparams["learning_rate"])
         hyperparams["learning_rate"] = schedule_fn
     
-    # Create log dir for this trial
+    # Create log directory for this specific trial
     log_path = os.path.join("logs", "iso_zoo_optimize", args.algo, f"trial_{trial.number}")
     os.makedirs(log_path, exist_ok=True)
     
-    # Create env with pricing policy converted to enum
+    # === ENVIRONMENT CREATION ===
+    # Get pricing policy enum from string
     pricing_policy_enum = PricingPolicy[args.pricing_policy]
     
-    # Training environment with monitoring
+    # Create training environment with monitoring
+    dispatch_config = {
+        "use_dispatch_action": args.use_dispatch_action,
+        "default_strategy": args.dispatch_strategy
+    }
+    
     env = gym.make(
         args.env, 
         render_mode="rgb_array",
         pricing_policy=pricing_policy_enum,
         demand_pattern=DemandPattern[args.demand_pattern],
         cost_type=CostType[args.cost_type],
-        num_pcs_agents=args.num_pcs_agents
+        num_pcs_agents=args.num_pcs_agents,
+        dispatch_config=dispatch_config,
+        trained_pcs_model_path=args.trained_pcs_model_path,
     )
     
+    # Add monitoring wrapper
     env = Monitor(
         env,
         os.path.join(log_path, 'train_monitor')
     )
     
+    # Create vectorized environment (for compatibility)
     env = DummyVecEnv([lambda: env])
     
-    # Apply VecNormalize - we'll handle this separately from the hyperparameters
-    should_normalize = True  # You can make this a parameter if needed
-    if should_normalize:
-        env = VecNormalize(
-            env,
-            norm_obs=True,
-            norm_reward=True,
-            clip_obs=10.,
-            clip_reward=10.,
-            gamma=hyperparams.get('gamma', 0.99),
-            epsilon=1e-8
-        )
+    # Apply observation and reward normalization
+    env = VecNormalize(
+        env,
+        norm_obs=True,
+        norm_reward=True,
+        clip_obs=10.,
+        clip_reward=10.,
+        gamma=hyperparams.get('gamma', 0.99),
+        epsilon=1e-8
+    )
     
-    # Set the random seed for reproducibility
+    # Set random seed for reproducibility
     set_random_seed(args.seed)
     
-    # Create evaluation env
+    # Create separate evaluation environment
     eval_env = gym.make(
         args.env, 
         render_mode="rgb_array",
         pricing_policy=pricing_policy_enum,
         demand_pattern=DemandPattern[args.demand_pattern],
         cost_type=CostType[args.cost_type],
-        num_pcs_agents=args.num_pcs_agents
+        num_pcs_agents=args.num_pcs_agents,
+        dispatch_config=dispatch_config,
+        trained_pcs_model_path=args.trained_pcs_model_path,
     )
     
     eval_env = Monitor(
@@ -305,25 +429,27 @@ def objective(trial: optuna.Trial, args) -> float:
     
     eval_env = DummyVecEnv([lambda: eval_env])
     
-    # Apply normalization to evaluation env if used during training
-    if should_normalize:
-        eval_env = VecNormalize(
-            eval_env,
-            norm_obs=True,
-            norm_reward=True,
-            clip_obs=10.,
-            clip_reward=10.,
-            gamma=hyperparams.get('gamma', 0.99),
-            epsilon=1e-8
-        )
-        eval_env.obs_rms = env.obs_rms
-        eval_env.ret_rms = env.ret_rms
-        # Don't normalize rewards for evaluation
-        eval_env.norm_reward = False
+    # Apply normalization to evaluation env
+    eval_env = VecNormalize(
+        eval_env,
+        norm_obs=True,
+        norm_reward=True,
+        clip_obs=10.,
+        clip_reward=10.,
+        gamma=hyperparams.get('gamma', 0.99),
+        epsilon=1e-8
+    )
     
-    # Create the action tracking callback and evaluation callback
+    # Share normalization stats between training and evaluation
+    eval_env.obs_rms = env.obs_rms
+    eval_env.ret_rms = env.ret_rms
+    eval_env.norm_reward = False  # Don't normalize rewards for evaluation
+    
+    # === CALLBACK SETUP ===
+    # Create action tracking callback
     action_tracker = ActionTrackingCallback(agent_name="ISO")
     
+    # Create evaluation callback
     eval_callback = EvalCallback(
         eval_env,
         callback_after_eval=action_tracker,
@@ -335,34 +461,36 @@ def objective(trial: optuna.Trial, args) -> float:
         render=False
     )
     
-    # Combine all callbacks
+    # Combine callbacks
     callbacks = CallbackList([
         eval_callback,
         action_tracker
     ])
     
-    # Train the agent
+    # === TRAINING AND EVALUATION ===
     try:
-        # Create and train the model with tensorboard logging
+        # Create model with tensorboard logging
         model = ALGOS[algo](
             env=env,
             tensorboard_log=log_path,
-            verbose=0,
+            verbose=0,  # Reduce console output during optimization
             seed=args.seed,
             **hyperparams
         )
         
+        # Train the agent
         model.learn(total_timesteps=args.n_timesteps, callback=callbacks)
         
-        # Close environments
+        # Clean up environments
         env.close()
         eval_env.close()
         
-        # Return the best evaluation mean reward
+        # Return the best mean reward as optimization objective
         return eval_callback.best_mean_reward
+        
     except Exception as e:
         print(f"Trial failed: {e}")
-        # Return a very negative value to indicate failure
+        # Return very negative value to indicate failed trial
         return float("-inf")
 
 def main():
@@ -434,7 +562,7 @@ def main():
     if "policy_kwargs" in best_params and "activation_fn" in best_params["policy_kwargs"]:
         if best_params["policy_kwargs"]["activation_fn"] == torch.nn.Tanh:
             best_params["policy_kwargs"]["activation_fn"] = "torch.nn.Tanh"
-        elif best_params["policy_kwargs"]["activation_fn"] == torch.nn.ReLU:
+        elif best_params["policy_kwargs"]["activation_fn"] == "torch.nn.ReLU":
             best_params["policy_kwargs"]["activation_fn"] = "torch.nn.ReLU"
     
     with open(output_path, "w") as f:

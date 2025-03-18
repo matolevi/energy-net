@@ -1,3 +1,29 @@
+"""
+Power Consumption and Storage (PCS) Training Script
+
+This script implements the core training pipeline for PCS agents using RL Zoo3 integration.
+It enables training of agents that learn optimal battery charging and discharging strategies
+in response to electricity prices set by the ISO.
+
+The PCS agent makes decisions that affect:
+1. When to charge/discharge batteries
+2. How much energy to buy/sell from the grid
+3. How to balance self-produced energy with consumption needs
+
+The script supports multiple algorithms (PPO, A2C, SAC, TD3) and environment configurations,
+and includes functionality for:
+- Loading and processing hyperparameters
+- Creating and configuring training environments
+- Setting up evaluation callbacks
+- Saving trained models and normalization statistics
+
+Usage:
+    python train_pcs_zoo.py --algo PPO --demand-pattern SINUSOIDAL --cost-type CONSTANT
+
+Author: Energy-Net Team
+Date: 2023-2024
+"""
+
 import os
 import argparse
 import yaml
@@ -18,6 +44,17 @@ from energy_net.market.iso.demand_patterns import DemandPattern
 from energy_net.market.iso.cost_types import CostType
 
 def parse_args():
+    """
+    Parse command line arguments for PCS agent training.
+    
+    This function defines all the available command-line options for configuring
+    PCS agent training, including algorithm selection, environment settings,
+    evaluation parameters, and logging options.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments containing algorithm selection,
+        environment settings, and training parameters.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo", type=str, default="ppo", help="RL Algorithm", choices=list(ALGOS.keys()))
     parser.add_argument("--env", type=str, default="PCSUnitEnv-v0", help="environment ID")
@@ -37,7 +74,18 @@ def parse_args():
     return parser.parse_args()
 
 def load_experiment_config(config_path: Optional[str] = None) -> Dict[str, Any]:
-    """Load experiment configuration from YAML file"""
+    """
+    Load experiment configuration from YAML file.
+    
+    This function loads custom experiment configurations from a specified YAML file,
+    which can include model architecture, hyperparameters, and environment settings.
+    
+    Args:
+        config_path: Path to the configuration YAML file
+        
+    Returns:
+        Dict[str, Any]: Configuration dictionary, empty if file not found
+    """
     if config_path is None or not os.path.exists(config_path):
         return {}
     
@@ -45,13 +93,38 @@ def load_experiment_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 def process_hyperparameters(hyperparams: Dict[str, Any]) -> Dict[str, Any]:
-    """Process hyperparameters to convert string representations to actual objects"""
+    """
+    Process hyperparameters to convert string representations to actual Python objects.
+    
+    This function handles conversion of string representations of PyTorch activation functions
+    to their actual class objects, which is required because YAML can't directly store class objects.
+    
+    Args:
+        hyperparams: Dictionary containing hyperparameters loaded from YAML
+        
+    Returns:
+        Dict[str, Any]: Processed hyperparameters with string references converted to objects
+    """
     if "policy_kwargs" in hyperparams and "activation_fn" in hyperparams["policy_kwargs"]:
         if hyperparams["policy_kwargs"]["activation_fn"] == "torch.nn.Tanh":
             hyperparams["policy_kwargs"]["activation_fn"] = torch.nn.Tanh
     return hyperparams
 
 def main():
+    """
+    Main function for training PCS agents.
+    
+    This is the core training pipeline that:
+    1. Parses command line arguments
+    2. Sets up the experiment and loads hyperparameters
+    3. Creates and configures training and evaluation environments
+    4. Initializes the RL model with the chosen algorithm
+    5. Sets up callbacks for evaluation and checkpointing
+    6. Trains the model and saves the results
+    
+    The function handles environment normalization, observation scaling, and hyperparameter
+    loading from multiple possible sources (optimized params, RL Zoo defaults, or base params).
+    """
     args = parse_args()
     
     # Load experiment config if provided

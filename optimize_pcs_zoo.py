@@ -1,3 +1,28 @@
+"""
+Power Consumption and Storage (PCS) Hyperparameter Optimization
+
+This script implements hyperparameter optimization for PCS agents using Optuna.
+It systematically searches for optimal hyperparameter configurations for the specified
+RL algorithm to maximize the performance of PCS agents in battery management.
+
+The optimization process:
+1. Creates a search space for hyperparameters based on the selected algorithm
+2. Trains multiple agents with different hyperparameter configurations
+3. Evaluates each configuration's performance
+4. Uses Bayesian optimization to guide the search toward promising regions
+5. Saves the best hyperparameters for future use
+
+Key hyperparameters optimized include:
+- Learning rates
+- Network architecture
+- Training parameters (batch size, epochs, etc.)
+- Algorithm-specific parameters
+
+Usage:
+    python optimize_pcs_zoo.py --algo PPO --n-trials 100 --demand-pattern SINUSOIDAL
+
+"""
+
 import os
 import argparse
 import optuna
@@ -20,6 +45,16 @@ from energy_net.market.iso.demand_patterns import DemandPattern
 from energy_net.market.iso.cost_types import CostType
 
 def parse_args():
+    """
+    Parse command line arguments for PCS hyperparameter optimization.
+    
+    This function defines all the available command-line parameters for configuring
+    the hyperparameter optimization process, including algorithm selection,
+    number of trials, and environment settings.
+    
+    Returns:
+        argparse.Namespace: Parsed arguments including algorithm selection and optimization settings
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo", type=str, default="ppo", help="RL Algorithm", choices=list(ALGOS.keys()))
     parser.add_argument("--env", type=str, default="PCSUnitEnv-v0", help="environment ID")
@@ -33,7 +68,21 @@ def parse_args():
     return parser.parse_args()
 
 def sample_ppo_params(trial: optuna.Trial) -> Dict[str, Any]:
-    """Sample hyperparameters for PPO algorithm"""
+    """
+    Sample hyperparameters for PPO algorithm using Optuna.
+    
+    This function defines the search space for Proximal Policy Optimization 
+    hyperparameters, including:
+    - Training parameters (batch size, n_steps, learning rate)
+    - Algorithm-specific parameters (entropy coefficient, clip range)
+    - Neural network architecture (hidden layer sizes)
+    
+    Args:
+        trial: Current Optuna trial that provides parameter suggestion methods
+        
+    Returns:
+        Dict[str, Any]: Dictionary of sampled hyperparameters
+    """
     return {
         "n_steps": trial.suggest_int("n_steps", 64, 2048, step=64),
         "batch_size": trial.suggest_int("batch_size", 64, 512, step=64),
@@ -57,7 +106,18 @@ def sample_ppo_params(trial: optuna.Trial) -> Dict[str, Any]:
     }
 
 def sample_a2c_params(trial: optuna.Trial) -> Dict[str, Any]:
-    """Sample hyperparameters for A2C algorithm"""
+    """
+    Sample hyperparameters for A2C algorithm using Optuna.
+    
+    This function defines the search space for Advantage Actor-Critic hyperparameters,
+    with ranges suitable for battery management problems.
+    
+    Args:
+        trial: Current Optuna trial
+        
+    Returns:
+        Dict[str, Any]: Dictionary of sampled hyperparameters
+    """
     return {
         "n_steps": trial.suggest_int("n_steps", 32, 128, step=32),
         "gamma": trial.suggest_float("gamma", 0.9, 0.9999),
@@ -76,7 +136,18 @@ def sample_a2c_params(trial: optuna.Trial) -> Dict[str, Any]:
     }
 
 def sample_sac_params(trial: optuna.Trial) -> Dict[str, Any]:
-    """Sample hyperparameters for SAC algorithm"""
+    """
+    Sample hyperparameters for SAC algorithm using Optuna.
+    
+    This function defines the search space for Soft Actor-Critic hyperparameters,
+    which is particularly well-suited for continuous control problems like battery management.
+    
+    Args:
+        trial: Current Optuna trial
+        
+    Returns:
+        Dict[str, Any]: Dictionary of sampled hyperparameters
+    """
     return {
         "learning_rate": trial.suggest_float("learning_rate", 1e-4, 5e-4, log=True),
         "buffer_size": trial.suggest_int("buffer_size", 50000, 200000, step=50000),
@@ -97,7 +168,18 @@ def sample_sac_params(trial: optuna.Trial) -> Dict[str, Any]:
     }
 
 def sample_td3_params(trial: optuna.Trial) -> Dict[str, Any]:
-    """Sample hyperparameters for TD3 algorithm"""
+    """
+    Sample hyperparameters for TD3 algorithm using Optuna.
+    
+    Twin Delayed DDPG is an off-policy algorithm specifically designed for
+    continuous control tasks. This function defines its hyperparameter space.
+    
+    Args:
+        trial: Current Optuna trial
+        
+    Returns:
+        Dict[str, Any]: Dictionary of sampled hyperparameters
+    """
     return {
         "learning_rate": trial.suggest_float("learning_rate", 1e-4, 5e-4, log=True),
         "buffer_size": trial.suggest_int("buffer_size", 50000, 200000, step=50000),
@@ -125,8 +207,22 @@ HYPERPARAMS_SAMPLER = {
 }
 
 def optimize_agent(trial: optuna.Trial, args: argparse.Namespace) -> float:
-    """Optimization target for Optuna"""
+    """
+    Optimization target function for Optuna trials.
     
+    This function handles a single optimization trial:
+    1. Samples hyperparameters from the algorithm-specific sampler
+    2. Creates training and evaluation environments
+    3. Trains an agent with the sampled hyperparameters
+    4. Evaluates the trained agent and returns its performance
+    
+    Args:
+        trial: Current Optuna trial that provides parameter suggestion methods
+        args: Command line arguments with fixed experiment settings
+        
+    Returns:
+        float: Mean reward achieved in evaluation (optimization objective)
+    """
     # Sample hyperparameters
     hyperparams = HYPERPARAMS_SAMPLER[args.algo](trial)
     
@@ -256,6 +352,18 @@ def optimize_agent(trial: optuna.Trial, args: argparse.Namespace) -> float:
         return float("-inf")
 
 def main():
+    """
+    Main function for running PCS hyperparameter optimization.
+    
+    This function:
+    1. Parses command line arguments
+    2. Creates or loads an Optuna study
+    3. Runs the optimization process for the specified number of trials
+    4. Saves the best hyperparameters for future use
+    
+    The best hyperparameters are saved to hyperparams/optimized/{algo}_best.yml
+    and can be used directly with the training script.
+    """
     args = parse_args()
     
     # Create or load the study

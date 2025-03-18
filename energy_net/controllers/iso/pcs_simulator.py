@@ -1,3 +1,21 @@
+"""
+PCS (Power Consumption & Storage) Simulator Module
+
+This module provides simulation capabilities for Power Consumption and Storage units
+in response to ISO pricing decisions. It simulates how consumers with battery storage
+capacity respond to electricity prices set by the ISO.
+
+Key features:
+1. Simulation of multiple PCS units with individual battery states
+2. Integration with trained RL agents to model PCS decision-making
+3. Calculation of aggregate production, consumption, and grid exchange
+4. Translation between ISO and PCS observation spaces
+5. Support for both rule-based and learned PCS behaviors
+
+This module enables the ISO agent to train with realistic consumer responses
+rather than simplified assumptions.
+"""
+
 from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
 import logging
@@ -53,40 +71,70 @@ class PCSSimulator:
         """
         Set a trained agent for a specific PCS unit.
         
+        This method loads a trained RL model from disk and assigns it to control
+        a specific PCS unit's charging/discharging behavior. This allows for
+        simulating sophisticated consumer responses based on learned policies.
+        
         Args:
             agent_idx: Index of the PCS unit to set the agent for
             model_path: Path to the trained agent model
             
         Returns:
             bool: True if successful, False otherwise
+            
+        Raises:
+            Exception: If model loading fails (error is caught and logged)
         """
-        success = self.pcs_manager.set_trained_agent(agent_idx, model_path)
-        
-        if success and agent_idx == 0:  # Store reference to first agent for compatibility
-            self.trained_pcs_agent = self.pcs_manager.agents[agent_idx].trained_agent
-        
-        if self.logger:
-            if success:
+        try:
+            # Load the trained agent directly
+            from stable_baselines3 import PPO
+            
+            # First load the model to verify it works
+            trained_agent = PPO.load(model_path)
+            print(f"Loading model for agent {agent_idx} from {model_path}")
+            
+            # Test the model with a dummy observation
+            dummy_obs = np.zeros(4, dtype=np.float32)  # Match PCS observation size
+            test_result = trained_agent.predict(dummy_obs, deterministic=True)
+            print(f"Test prediction successful: {test_result}")
+            
+            # Store the agent directly in PCSManager
+            success = self.pcs_manager.set_trained_agent(agent_idx, model_path)
+            
+            # For compatibility with older code, store a direct reference
+            # to the first trained agent
+            if success and agent_idx == 0:
+                self.trained_pcs_agent = trained_agent
+                print(f"Agent {agent_idx} fully initialized")
+            
+            if self.logger:
                 self.logger.info(f"Successfully set trained agent {agent_idx} from {model_path}")
-            else:
-                self.logger.error(f"Failed to set trained agent {agent_idx} from {model_path}")
                 
-        return success
+            return success
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Failed to set trained agent {agent_idx} from {model_path}: {e}")
+            print(f"Error loading model: {str(e)}")
+            return False
     
     def translate_to_pcs_observation(self, current_time: float, pcs_idx: int = 0) -> np.ndarray:
         """
         Converts current state to PCS observation format for a specific PCS unit.
+        
+        The PCS observation includes:
+        1. Current battery level (state of charge)
+        2. Time of day (normalized to [0,1])
+        3. Current local production (e.g., from solar panels)
+        4. Current local consumption (electricity demand)
+        
+        This observation format matches what PCS agents were trained with.
         
         Args:
             current_time: Current time as a fraction of day
             pcs_idx: Index of the PCS unit (default: 0 for first unit)
             
         Returns:
-            np.ndarray: Observation array containing:
-                - Current battery level
-                - Time of day
-                - Current production
-                - Current consumption
+            np.ndarray: Observation array for the PCS agent
         """
         if pcs_idx >= len(self.pcs_manager.agents):
             if self.logger:
@@ -118,8 +166,15 @@ class PCSSimulator:
         """
         Simulates a specific PCS unit's response to current market conditions.
         
+        This method:
+        1. Gets the observation for the specific PCS unit
+        2. Uses the unit's trained agent (if available) to determine the battery action
+        3. Returns the battery action (charging/discharging rate)
+        
+        If no trained agent is available, it uses a default charging behavior.
+        
         Args:
-            observation (np.ndarray): Current state observation for PCS unit
+            observation: Current state observation for PCS unit
             pcs_idx: Index of the PCS unit to simulate (default: 0 for first unit)
             
         Returns:
@@ -160,6 +215,12 @@ class PCSSimulator:
     def simulate_response(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
         Simulate the response of all PCS units to the current market conditions.
+        
+        This is the main method called by the ISO controller to get the aggregate
+        response of all PCS units to the current ISO prices. It:
+        1. Updates all PCS units based on the current time and prices
+        2. Calculates total production, consumption, and net demand
+        3. Tracks battery levels and actions
         
         Args:
             state: Dictionary containing the current state
@@ -239,4 +300,4 @@ class PCSSimulator:
         return {
             'battery_levels': self.pcs_manager.battery_levels[-1] if self.pcs_manager.battery_levels else [],
             'battery_actions': self.pcs_manager.battery_actions[-1] if self.pcs_manager.battery_actions else []
-        } 
+        }

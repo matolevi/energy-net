@@ -1,3 +1,26 @@
+"""
+ISO Controller Module
+
+This module implements the core Independent System Operator (ISO) controller,
+which is responsible for managing electricity pricing, dispatch, and grid stability.
+It serves as the main integration point between different components of the ISO system.
+
+Key responsibilities:
+1. Processing agent actions into market prices and dispatch decisions
+2. Simulating grid operations and power flows
+3. Managing interactions with PCS units
+4. Calculating grid state, costs, and rewards
+5. Building observations for the RL agent
+
+The controller uses a modular design with separate components for:
+- Pricing strategies (Quadratic, Online, Constant)
+- PCS simulation
+- Grid metrics and reward calculation
+
+This design enables flexible configuration of different market mechanisms,
+pricing policies, and grid scenarios.
+"""
+
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -24,16 +47,25 @@ from energy_net.controllers.iso.pricing_strategy import PricingStrategyFactory, 
 class ISOController:
     """
     Independent System Operator (ISO) Controller responsible for setting electricity prices.
-    Can operate with a trained PPO model or other pricing mechanisms.
+    
+    This class implements the core logic of the ISO, handling interactions between
+    the RL agent, pricing mechanisms, PCS units, and grid operations. It acts as
+    the central integration point for all ISO-related components.
+    
+    The controller uses composition to delegate specialized functionality to
+    dedicated components:
+    - PricingStrategy: Handles action processing based on pricing policy
+    - PCSSimulator: Manages PCS unit simulations
+    - MetricsHandler: Calculates costs, rewards, and metrics
     
     Observation Space:
         [time, predicted_demand, pcs_demand]
         
     Action Space:
-        [b0, b1, b2, s0, s1, s2, dispatch_profile] 
-        - b0, b1, b2: Polynomial coefficients for buy pricing
-        - s0, s1, s2: Polynomial coefficients for sell pricing
-        - dispatch_profile: 48 values for dispatch profile
+        Determined by the pricing policy:
+        - ONLINE: [buy_price, sell_price, (opt) dispatch]
+        - QUADRATIC: [polynomial coefficients, (opt) dispatch profile]
+        - CONSTANT: [fixed buy/sell prices, (opt) dispatch profile]
     """
     
     def __init__(
@@ -50,7 +82,30 @@ class ISOController:
         reward_type: str = 'iso',
         model_path: Optional[str] = None,
         trained_pcs_model_path: Optional[str] = None,
+        dispatch_config: Optional[Dict[str, Any]] = None,
     ):
+        """
+        Initialize the ISO controller with specified settings.
+        
+        This constructor sets up all components required for the ISO simulation,
+        including logging, configuration loading, pricing strategy initialization,
+        and PCS simulation.
+        
+        Args:
+            num_pcs_agents: Number of PCS units to simulate
+            pricing_policy: Policy to determine how prices are set (QUADRATIC, ONLINE, CONSTANT)
+            demand_pattern: Pattern of demand variation over time
+            cost_type: How grid operation costs are calculated
+            render_mode: Visual rendering mode (not currently implemented)
+            env_config_path: Path to environment configuration file
+            iso_config_path: Path to ISO-specific configuration file
+            pcs_unit_config_path: Path to PCS unit configuration file
+            log_file: Path for logging ISO controller events
+            reward_type: Type of reward function to use ('iso', 'cost', etc.)
+            model_path: Optional path to a pre-trained ISO model
+            trained_pcs_model_path: Optional path to pre-trained PCS models
+            dispatch_config: Configuration for dispatch control
+        """
         # Set up logger
         self.logger = setup_logger('ISOController', log_file)
         self.logger.info(f"Initializing ISO Controller with {pricing_policy.value} policy")
@@ -113,6 +168,16 @@ class ISOController:
         # Get action space parameters from config based on pricing policy
         action_spaces_config = self.iso_config.get('action_spaces', {})
         
+        # Check if dispatch should be included in actions (from config or parameter)
+        dispatch_config_from_file = self.iso_config.get('dispatch', {})
+        
+        # Override with passed dispatch_config if provided
+        if dispatch_config:
+            self.use_dispatch_action = dispatch_config.get('use_dispatch_action', 
+                                       dispatch_config_from_file.get('use_dispatch_action', False))
+        else:
+            self.use_dispatch_action = dispatch_config_from_file.get('use_dispatch_action', False)
+        
         # Initialize pricing strategy based on policy
         self.pricing_strategy = PricingStrategyFactory.create_strategy(
             pricing_policy=self.pricing_policy,
@@ -123,8 +188,9 @@ class ISOController:
             logger=self.logger
         )
         
-        # Set action space based on pricing strategy
-        self.action_space = self.pricing_strategy.create_action_space()
+        # Set action space based on pricing strategy and dispatch configuration
+        self.action_space = self.pricing_strategy.create_action_space(use_dispatch_action=self.use_dispatch_action)
+        self.logger.info(f"Action space: {self.action_space}")
         
         # Initialize ISO simulation variables
         self.iso_buy_price = 0.0
@@ -192,6 +258,18 @@ class ISOController:
         self.logger.info(f"Using demand pattern: {demand_pattern.value}")
 
     def load_config(self, config_path: str) -> Dict[str, Any]:
+        """
+        Load configuration from YAML file.
+        
+        Args:
+            config_path: Path to the YAML configuration file
+            
+        Returns:
+            Dict containing configuration parameters
+            
+        Raises:
+            FileNotFoundError: If the configuration file is not found
+        """
         if not os.path.exists(config_path):
             self.logger.error(f"Configuration file not found: {config_path}")
             raise FileNotFoundError(f"Configuration file not found: {config_path}")
@@ -201,6 +279,16 @@ class ISOController:
         return config
 
     def build_observation(self) -> np.ndarray:
+        """
+        Build the observation vector for the agent.
+        
+        Creates an observation array containing current time, predicted demand,
+        and PCS demand, which provides the agent with the information needed to
+        make pricing decisions.
+        
+        Returns:
+            np.ndarray: Observation array [time, predicted_demand, pcs_demand]
+        """
         return np.array([
             self.current_time,
             self.predicted_demand,
@@ -209,7 +297,13 @@ class ISOController:
 
     def calculate_predicted_demand(self, time: float) -> float:
         """
-        Calculate predicted demand using selected pattern
+        Calculate predicted demand using the selected pattern.
+        
+        Args:
+            time: Current time as a fraction of the day (0-1)
+            
+        Returns:
+            float: Predicted demand value based on the demand pattern
         """
         return calculate_demand(
             time=time,
@@ -219,10 +313,13 @@ class ISOController:
 
     def translate_to_pcs_observation(self) -> np.ndarray:
         """
-        Converts current state to PCS observation format.
+        Convert current state to PCS observation format.
+        
+        Maps ISO environment state to the observation format expected by PCS agents,
+        enabling proper simulation of PCS behavior.
         
         Returns:
-            np.ndarray: Observation array containing:
+            np.ndarray: Observation array for PCS containing:
                 - Current battery level
                 - Time of day
                 - Current production
@@ -238,7 +335,22 @@ class ISOController:
         options: Optional[dict] = None
     ) -> Tuple[np.ndarray, dict]:
         """
-        Resets the ISO controller state.
+        Reset the ISO controller state for a new episode.
+        
+        This method:
+        1. Resets all internal state variables
+        2. Resets PCS units and simulators
+        3. Initializes time and demand values
+        4. Returns the initial observation
+        
+        Args:
+            seed: Random seed for reproducibility
+            options: Additional options like reward type
+            
+        Returns:
+            Tuple containing:
+            - Initial observation array
+            - Info dictionary
         """
         self.logger.info("Resetting ISO Controller environment.")
 
@@ -317,17 +429,28 @@ class ISOController:
 
     def step(self, action: Union[float, np.ndarray, int]) -> Tuple[np.ndarray, float, bool, bool, dict]:
         """
-        Execute one step in the environment.
+        Execute one step in the ISO environment.
+        
+        This is the core simulation loop that advances the grid state by one time step.
+        The sequence of operations is:
+        
+        1. Update time and calculate predicted demand
+        2. Process agent action to determine prices and dispatch
+        3. Update PCS units and get their response
+        4. Calculate grid state variables and costs
+        5. Compute reward
+        6. Prepare observation for the next step
         
         Args:
-            action: Agent action determining electricity pricing
+            action: Agent action determining electricity pricing/dispatch
+                Format depends on the pricing policy and dispatch configuration
             
         Returns:
-            observation: Next state observation
+            observation: Next state observation [time, predicted_demand, pcs_demand]
             reward: Reward for this step
             done: Whether episode is finished
-            truncated: Whether episode was truncated
-            info: Additional information
+            truncated: Whether episode was truncated (always False)
+            info: Additional information dictionary with metrics
         """
         # 1. Update time and environment state
         self.count += 1
@@ -344,13 +467,14 @@ class ISOController:
             f"  Predicted Demand: {self.predicted_demand:.2f} MWh"
         )
 
-        # 2. Process ISO action using pricing strategy
+        # 2. Process ISO action using pricing strategy with use_dispatch_action flag
         self.iso_buy_price, self.iso_sell_price, dispatch, self.first_action_taken = (
             self.pricing_strategy.process_action(
                 action=action,
                 step_count=self.count,
                 first_action_taken=self.first_action_taken,
-                predicted_demand=self.predicted_demand
+                predicted_demand=self.predicted_demand,
+                use_dispatch_action=self.use_dispatch_action  # Pass the flag
             )
         )
 
@@ -407,9 +531,18 @@ class ISOController:
         return observation, float(reward), done, truncated, info
 
     def get_info(self) -> Dict[str, float]:
+        """
+        Get additional information about the environment state.
+        
+        Returns:
+            Dictionary containing the running average price
+        """
         return {"running_avg": self.avg_price}
 
     def close(self):
+        """
+        Clean up resources and close loggers when the environment is done.
+        """
         self.logger.info("Closing ISO Controller environment.")
         for logger_name in []:
             logger = logging.getLogger(logger_name)
@@ -420,35 +553,53 @@ class ISOController:
         self.logger.info("ISO Controller environment closed successfully.")
 
     def set_trained_pcs_agent(self, agent_idx: int, pcs_agent_path: str):
-        """Set trained agent for specific PCS unit"""
+        """
+        Set a trained agent for a specific PCS unit.
+        
+        This method loads a trained RL model for a PCS agent and registers it
+        with the PCS simulator for use in simulating consumer behavior.
+        
+        Args:
+            agent_idx: Index of the PCS unit to set the agent for
+            pcs_agent_path: Path to the trained agent model file
+            
+        Returns:
+            bool: Whether the agent was successfully loaded and set
+        """
         success = self.pcs_simulator.set_trained_agent(agent_idx, pcs_agent_path)
         return success
 
     def simulate_pcs_response(self, observation: np.ndarray) -> float:
         """
-        Simulates the PCS unit's response to current market conditions.
+        Simulate a PCS unit's response to current market conditions.
+        
+        This method determines how a PCS unit would react to the current
+        market prices, using either a trained agent or default behavior.
         
         Args:
-            observation (np.ndarray): Current state observation for PCS unit.
+            observation: Current state observation for PCS unit
             
         Returns:
-            float: Battery action (positive for charging, negative for discharging).
+            float: Battery action (positive for charging, negative for discharging)
         """
         # Delegate to the PCS simulator
         return self.pcs_simulator.simulate_pcs_response(observation)
 
     def initialize_reward(self, reward_type: str) -> BaseReward:
         """
-        Creates the appropriate reward function instance.
+        Create the appropriate reward function instance.
+        
+        Initializes the reward calculator based on the specified reward type,
+        which determines how the agent will be rewarded for its actions.
         
         Args:
-            reward_type (str): Type of reward ('iso' or 'cost')
+            reward_type: Type of reward ('iso', 'cost', etc.)
             
         Returns:
-            BaseReward: Configured reward function
+            BaseReward: Configured reward function instance
             
         Raises:
-            ValueError: If reward_type is not supported
+            ValueError: If the reward type is not supported
         """
         if reward_type in ['iso', 'cost']:
             self.logger.info(f"Initializing {reward_type} reward function")

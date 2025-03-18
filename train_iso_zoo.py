@@ -1,3 +1,22 @@
+"""
+Independent System Operator (ISO) Training Script
+
+This script implements the core training pipeline for ISO agents using RL Zoo3 integration.
+It enables training of ISO agents that learn to set optimal electricity prices and dispatch
+strategies in a simulated power grid.
+
+The ISO agent makes decisions that affect:
+1. Buy/sell prices for electricity
+2. Dispatch amounts (optional)
+3. Grid-level supply/demand balance
+
+The script supports multiple algorithms (PPO, A2C, SAC, TD3) and environment configurations.
+
+Usage:
+    python train_iso_zoo.py --algo PPO --pricing-policy ONLINE --demand-pattern SINUSOIDAL --cost-type CONSTANT
+
+"""
+
 import os
 import argparse
 import gymnasium as gym
@@ -21,8 +40,14 @@ from energy_net.market.iso.cost_types import CostType
 from energy_net.env import PricingPolicy
 
 def parse_args():
-    """Parse command line arguments for ISO agent training"""
-    parser = argparse.ArgumentParser()
+    """
+    Parse command line arguments for ISO agent training.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments including algorithm selection,
+        environment settings, training parameters, and dispatch configuration.
+    """
+    parser = argparse.ArgumentParser(description="Train an ISO agent using RL Zoo3 integration")
     parser.add_argument("--algo", type=str, default="ppo", help="RL algorithm to use")
     parser.add_argument("--env", type=str, default="ISOEnv-v0", help="Environment ID")
     parser.add_argument("--hyperparams", type=str, default=None, help="Hyperparameters file path")
@@ -48,10 +73,34 @@ def parse_args():
     parser.add_argument("--tensorboard-log", type=str, default=None, help="TensorBoard log directory")
     parser.add_argument("--use-optimized", action="store_true", default=True, 
                       help="Use optimized hyperparameters")
+    parser.add_argument("--use-dispatch-action", action="store_true", default=False,
+                      help="Enable dispatch as part of the agent's action space, allowing the agent to control "
+                           "both pricing and dispatch decisions simultaneously")
+    parser.add_argument("--dispatch-strategy", type=str, default="predicted_demand",
+                      choices=["predicted_demand", "fixed", "scaled", "manual_profile", "daily_pattern"],
+                      help="Strategy for dispatch when not controlled by agent actions: "
+                           "predicted_demand=match demand exactly, fixed=use constant value, "
+                           "scaled=scale predicted demand, manual_profile=use predefined profile")
+    parser.add_argument("--trained-pcs-model-path", type=str, default=None,
+                      help="Path to trained PCS model to use for PCS agent simulation")
     return parser.parse_args()
 
 def process_hyperparameters(hyperparams: Dict[str, Any]) -> Dict[str, Any]:
-    """Process hyperparameters to convert string representations to actual objects"""
+    """
+    Process hyperparameters to convert string representations to actual Python objects.
+    
+    This function handles conversion of string representations of PyTorch activation functions
+    to their actual class objects, which is required because YAML can't directly store class objects.
+    
+    Example:
+        Converting "torch.nn.Tanh" string from YAML file to actual torch.nn.Tanh class
+    
+    Args:
+        hyperparams: Dictionary containing hyperparameters loaded from YAML
+        
+    Returns:
+        Dict[str, Any]: Processed hyperparameters with string references converted to objects
+    """
     if "policy_kwargs" in hyperparams and "activation_fn" in hyperparams["policy_kwargs"]:
         if hyperparams["policy_kwargs"]["activation_fn"] == "torch.nn.Tanh":
             hyperparams["policy_kwargs"]["activation_fn"] = torch.nn.Tanh
@@ -60,7 +109,20 @@ def process_hyperparameters(hyperparams: Dict[str, Any]) -> Dict[str, Any]:
     return hyperparams
 
 def load_hyperparams(args):
-    """Load hyperparameters from file or use optimized if available"""
+    """
+    Load hyperparameters from file or use optimized if available.
+    
+    This function implements a priority scheme for hyperparameters:
+    1. Use specified file if provided
+    2. Use optimized hyperparameters if available and requested
+    3. Fall back to default hyperparameters
+    
+    Args:
+        args: Command line arguments containing hyperparameter preferences
+        
+    Returns:
+        dict: Hyperparameters to use for training
+    """
     hyperparams = {}
     
     if args.hyperparams is not None:
@@ -82,18 +144,41 @@ def load_hyperparams(args):
     return hyperparams
 
 def create_env(args):
-    """Create ISO environment with the specified settings"""
+    """
+    Create an ISO environment with the specified settings.
+    
+    This function creates a gym environment for the ISO agent that includes:
+    - Action scaling to normalize action space
+    - Monitoring for logging performance
+    - Custom configuration for dispatch and pricing
+    
+    The environment allows the ISO to set buy/sell prices and optionally control dispatch.
+    
+    Args:
+        args: Command line arguments containing environment settings
+        
+    Returns:
+        callable: Function that creates and initializes an ISO environment
+    """
     # Convert pricing_policy string to enum
     pricing_policy_enum = PricingPolicy[args.pricing_policy]
     
     def _init():
+        # Create a dispatch configuration dict
+        dispatch_config = {
+            "use_dispatch_action": args.use_dispatch_action,  # Whether agent controls dispatch
+            "default_strategy": args.dispatch_strategy        # Strategy when agent doesn't control dispatch
+        }
+        
         env = gym.make(
             args.env,
             render_mode="rgb_array",
             pricing_policy=pricing_policy_enum,
             demand_pattern=DemandPattern[args.demand_pattern],
             cost_type=CostType[args.cost_type],
-            num_pcs_agents=args.num_pcs_agents
+            num_pcs_agents=args.num_pcs_agents,
+            dispatch_config=dispatch_config,  # Pass dispatch configuration
+            trained_pcs_model_path=args.trained_pcs_model_path,  # Pass trained PCS model path
         )
         
         # Print the actual action space to understand its bounds
@@ -113,7 +198,18 @@ def create_env(args):
     return _init
 
 def create_test_env(args):
-    """Create environment for evaluation"""
+    """
+    Create environment for evaluation with identical parameters to training.
+    
+    This ensures consistent evaluation during and after training by creating
+    an environment with the same parameters but independent state.
+    
+    Args:
+        args: Command line arguments containing environment settings
+        
+    Returns:
+        callable: Function that creates an evaluation environment
+    """
     # Convert pricing_policy string to enum
     pricing_policy_enum = PricingPolicy[args.pricing_policy]
     
@@ -140,7 +236,19 @@ def create_test_env(args):
     return _init_test_env
 
 def setup_experiment(args, hyperparams):
-    """Set up the experiment with the given hyperparameters"""
+    """
+    Set up the experiment with proper logging and configuration saving.
+    
+    Creates a unique experiment folder with timestamp, saves configuration,
+    and sets up logging paths for model checkpoints and TensorBoard.
+    
+    Args:
+        args: Command line arguments
+        hyperparams: Hyperparameters for the experiment
+        
+    Returns:
+        tuple: (log_folder, tensorboard_log) paths for the experiment
+    """
     # Create experiment timestamp for unique folder names
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     experiment_name = f"{timestamp}_{args.algo}"
@@ -172,18 +280,40 @@ def setup_experiment(args, hyperparams):
     return log_folder, tensorboard_log
 
 def train(args):
-    """Main training function for ISO agent"""
+    """
+    Main training function for ISO agent.
+    
+    This function implements the complete training pipeline:
+    1. Load and process hyperparameters
+    2. Create and normalize environments
+    3. Set up callbacks for evaluation and checkpointing
+    4. Initialize RL model with specified algorithm
+    5. Train the model
+    6. Save the trained model and normalizer
+    
+    The training process includes regular evaluation and checkpointing,
+    with support for TensorBoard logging and model saving.
+    
+    Args:
+        args: Command line arguments containing training settings
+        
+    Returns:
+        str: Path to the saved final model
+    """
+    # === SETUP PHASE ===
+    # Load hyperparameters from file or optimized source
     hyperparams = load_hyperparams(args)
     log_folder, tensorboard_log = setup_experiment(args, hyperparams)
     
-    # Set random seed
+    # Set random seed for reproducibility
     set_random_seed(args.seed)
     
-    # Create environments
+    # === ENVIRONMENT CREATION ===
+    # Create training environment with specified parameters
     env_fn = create_env(args)
     env = DummyVecEnv([env_fn])
     
-    # Always normalize the environment with explicit parameters matching PCS pipeline
+    # Apply normalization for training stability
     env = VecNormalize(
         env,
         norm_obs=True,
@@ -194,11 +324,11 @@ def train(args):
         epsilon=1e-8
     )
     
-    # Create evaluation env
+    # Create separate evaluation environment
     eval_env_fn = create_test_env(args)
     eval_env = DummyVecEnv([eval_env_fn])
     
-    # Apply normalization to evaluation env with the same parameters
+    # Apply normalization to evaluation environment with same parameters
     eval_env = VecNormalize(
         eval_env,
         norm_obs=True,
@@ -207,36 +337,36 @@ def train(args):
         clip_reward=1.0,
         gamma=hyperparams.get('gamma', 0.99),
         epsilon=1e-8,
-        training=False  # No updates during evaluation - added to match PCS
+        training=False  # No updates during evaluation
     )
     
-    # Copy statistics from training env
+    # Copy normalization statistics from training environment
     eval_env.obs_rms = env.obs_rms
     eval_env.ret_rms = env.ret_rms
-    # Don't normalize rewards for evaluation
-    eval_env.norm_reward = False
+    eval_env.norm_reward = False  # Don't normalize rewards for evaluation
     
-    # Create model
+    # === MODEL CREATION ===
+    # Initialize RL model with specified algorithm
     algo = args.algo.lower()
     model_class = ALGOS[algo]
     
-    # Set up model kwargs
+    # Set up model parameters
     model_kwargs = {"verbose": 1, "seed": args.seed, "policy": "MlpPolicy"}
     
     # Add tensorboard logging if specified
     if tensorboard_log:
         model_kwargs["tensorboard_log"] = tensorboard_log
     
-    # Combine with hyperparameters
+    # Combine with algorithm-specific hyperparameters
     model_kwargs.update(hyperparams)
     
-    # Create model
+    # Create the model
     model = model_class(env=env, **model_kwargs)
     
-    # Set up callbacks
+    # === CALLBACK SETUP ===
     callbacks = []
     
-    # Checkpoint callback
+    # Checkpoint callback for regular model saving
     save_path = os.path.join(log_folder, "checkpoints")
     os.makedirs(save_path, exist_ok=True)
     checkpoint_callback = CheckpointCallback(
@@ -248,11 +378,11 @@ def train(args):
     )
     callbacks.append(checkpoint_callback)
     
-    # Evaluation callback
+    # Setup for evaluation during training
     eval_path = os.path.join(log_folder, "evaluations")
     os.makedirs(eval_path, exist_ok=True)
     
-    # Action tracking callback
+    # Track actions and other metrics
     action_track_callback = ActionTrackingCallback(
         agent_name="ISO"
     )
@@ -270,39 +400,40 @@ def train(args):
     )
     callbacks.append(eval_callback)
     
-    # Create callback list
+    # Combine all callbacks
     callback = CallbackList(callbacks)
     
-    # Train the model
+    # === TRAINING PHASE ===
+    # Train the model with progress bar
     model.learn(
         total_timesteps=args.total_timesteps,
         callback=callback,
-        progress_bar=True  # Add progress bar for better training visualization
+        progress_bar=True
     )
     
-    # Create models directory if it doesn't exist
+    # === MODEL SAVING ===
+    # Create output directory
     models_dir = os.path.join("models", "iso_zoo", args.algo.lower())
     os.makedirs(models_dir, exist_ok=True)
     
-    # Save the final model
+    # Save the final trained model
     model_path = os.path.join(models_dir, "final_model_iso.zip")
     model.save(model_path)
     print(f"Final model saved to {model_path}")
     
-    # Save the VecNormalize statistics if used
+    # Save normalization statistics for later use
     if isinstance(env, VecNormalize):
         norm_path = os.path.join(models_dir, "final_model_normalizer.pkl")
         env.save(norm_path)
         print(f"Saved normalizer to {norm_path}")
         
-        # Also save it under a different name for evaluation
+        # Also save evaluation-specific normalizer
         eval_norm_path = os.path.join(models_dir, "final_model_eval_normalizer.pkl")
         env.save(eval_norm_path)
-        # Set normalization of rewards to False for evaluation
-        env.norm_reward = False
+        env.norm_reward = False  # Disable reward normalization for evaluation
         print(f"Saved evaluation normalizer to {eval_norm_path}")
     
-    # Close environments
+    # Clean up
     env.close()
     eval_env.close()
     

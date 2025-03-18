@@ -1,3 +1,27 @@
+"""
+Power Consumption and Storage (PCS) Evaluation Script
+
+This script provides comprehensive evaluation tools for trained PCS agents.
+It evaluates the agent's performance, collects detailed metrics, and generates
+visualizations to help understand the agent's battery management strategy.
+
+Key evaluation metrics include:
+- Overall reward performance
+- Battery state of charge over time
+- Energy exchange with the grid
+- Cost and revenue analysis
+- Response to price signals
+
+The script generates both quantitative metrics and visualizations that can be
+saved to a specified output directory for detailed analysis.
+
+Usage:
+    python eval_pcs_zoo.py --algo ppo --env PCSUnitEnv-v0 --model-path models/pcs_zoo/ppo/final_model_ppo.zip
+                           --normalizer-path models/pcs_zoo/ppo/final_model_normalizer.pkl
+                           --output-dir eval_results/ppo_pcs
+
+"""
+
 import os
 import argparse
 import gymnasium as gym
@@ -15,7 +39,17 @@ from energy_net.market.iso.demand_patterns import DemandPattern
 from energy_net.market.iso.cost_types import CostType
 
 def parse_args():
-    """Parse command line arguments for PCS evaluation"""
+    """
+    Parse command line arguments for PCS agent evaluation.
+    
+    This function defines all the available command-line options for configuring
+    PCS agent evaluation, including model paths, environment settings, and
+    visualization options.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments containing model paths,
+        environment settings, and evaluation parameters.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--algo", type=str, required=True, help="RL Algorithm", choices=list(ALGOS.keys()))
     parser.add_argument("--env", type=str, default="PCSUnitEnv-v0", help="environment ID")
@@ -30,7 +64,19 @@ def parse_args():
     return parser.parse_args()
 
 def create_env(args):
-    """Create PCS evaluation environment"""
+    """
+    Create a PCS environment for evaluation with specified settings.
+    
+    Sets up the environment with the same configuration used during training,
+    including demand pattern, cost type, and action scaling to ensure 
+    consistent evaluation.
+    
+    Args:
+        args: Command line arguments containing environment settings
+        
+    Returns:
+        callable: Function that creates and initializes a PCS environment for evaluation
+    """
     def _init():
         env = gym.make(
             args.env,
@@ -54,7 +100,27 @@ def create_env(args):
     return _init
 
 def collect_episode_data(env, model, deterministic=True):
-    """Collect data from a single episode for a PCS agent"""
+    """
+    Collect detailed data from a single evaluation episode.
+    
+    This function runs a complete episode using the trained model and collects
+    comprehensive performance metrics including:
+    - Agent actions (battery charging/discharging)
+    - Environmental state (prices, battery levels, production, consumption)
+    - Performance metrics (costs, grid exchanges, rewards)
+    
+    The collected data is organized into a structured dictionary for analysis
+    and visualization.
+    
+    Args:
+        env: Evaluation environment
+        model: Trained PCS agent model
+        deterministic: Whether to use deterministic actions (recommended for evaluation)
+        
+    Returns:
+        dict: Dictionary containing all episode data including actions, state variables,
+              and performance metrics
+    """
     # Handle different reset() return formats correctly (observation or observation+info)
     try:
         # Try the newer Gymnasium API format
@@ -196,7 +262,24 @@ def collect_episode_data(env, model, deterministic=True):
     return episode_data
 
 def plot_episode_results(episode_data: dict, episode_num: int, save_path: str, agent_name: str = "PCS"):
-    """Generate visualization similar to ActionTrackingCallback, matching ISO style exactly"""
+    """
+    Generate visualization plots for a specific evaluation episode.
+    
+    Creates multiple plots:
+    1. Energy flows and battery levels with pricing signals
+    2. Cost components breakdown per time step
+    3. Final cost distribution across cost categories
+    4. Battery actions showing raw vs. validated actions
+    
+    The plots use a consistent color scheme that matches the ISO evaluation
+    visualizations for easier comparison.
+    
+    Args:
+        episode_data: Dictionary containing episode metrics
+        episode_num: Episode index number
+        save_path: Directory where plots will be saved
+        agent_name: Name of the agent for plot titles
+    """
     if not episode_data:
         print(f"No data for episode {episode_num}")
         return
@@ -363,7 +446,19 @@ def plot_episode_results(episode_data: dict, episode_num: int, save_path: str, a
     print(f"Saved PCS actions plot to {actions_path}")
 
 def main():
-    """Main function for evaluating PCS agent"""
+    """
+    Main function for evaluating PCS agent.
+    
+    This function:
+    1. Parses command line arguments
+    2. Sets up evaluation environment with appropriate wrappers
+    3. Loads the trained model and normalizer
+    4. Runs evaluation episodes and collects performance data
+    5. Generates visualizations and summary statistics
+    6. Saves results to the specified output directory
+    
+    The evaluation runs in deterministic mode by default to get consistent results.
+    """
     args = parse_args()
     
     # Set random seed

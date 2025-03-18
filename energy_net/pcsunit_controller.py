@@ -1,3 +1,22 @@
+"""
+PCSUnit Controller Module
+
+This module implements the controller for Power Consumption and Storage Units (PCSUnit).
+It manages the battery charging/discharging strategies in response to electricity prices
+from the ISO and coordinates the various components involved in PCS operations.
+
+Key responsibilities:
+1. Interfacing with the PCSUnit component to manage battery operations
+2. Processing agent actions and translating them to battery commands
+3. Calculating energy production, consumption, and grid exchange
+4. Managing state transitions and reward calculations
+5. Providing standardized observations for the RL agent
+
+The controller serves as the bridge between the reinforcement learning agent
+and the physical battery simulation, enabling intelligent energy management
+that can respond to market conditions.
+"""
+
 from energy_net.components.grid_entity import GridEntity
 from typing import Optional, Tuple, Dict, Any, Union, Callable
 import numpy as np
@@ -382,8 +401,18 @@ class PCSUnitController:
         """
         Get current battery state information.
         
+        Retrieves comprehensive information about the current state of the battery,
+        including current level, physical constraints, and rate limits. This information
+        is essential for understanding the battery's operational context and constraints.
+        
         Returns:
-            Dictionary with battery state metrics
+            Dictionary containing:
+                - battery_level: Current state of charge (MWh)
+                - energy_change: Most recent change in energy level (MWh)
+                - battery_min: Minimum allowed battery level (MWh)
+                - battery_max: Maximum battery capacity (MWh)
+                - charge_rate_max: Maximum charging rate (MWh/step)
+                - discharge_rate_max: Maximum discharging rate (MWh/step)
         """
         return {
             'battery_level': self.battery_level,
@@ -396,24 +425,40 @@ class PCSUnitController:
     
     def step(self, action: Union[float, np.ndarray, int]) -> Tuple[np.ndarray, float, bool, bool, dict]:
         """
-        Executes one time step of the PCS unit.
+        Executes one time step of the PCS unit environment.
         
-        Process flow:
-        1. Update time and get current ISO prices
-        2. Validate and process battery action
-        3. Update PCS unit state
-        4. Calculate costs and rewards
+        This is the core simulation method that advances the state by one time step.
+        The detailed process flow is:
+        
+        1. Update time and get current ISO prices based on the time and demand
+        2. Process and validate the battery action (ensure it respects physical constraints)
+        3. Update PCS unit state including battery level, production, and consumption
+        4. Calculate net exchange with the grid (buying or selling electricity)
+        5. Determine financial impacts (revenue, costs) based on market prices
+        6. Calculate grid impacts (demand, shortfall, dispatch costs)
+        7. Compute reward based on the updated state
+        8. Build observation vector for the agent
         
         Args:
-            action: Battery charging/discharging power
-                   Positive = charging, Negative = discharging
+            action: Battery charging/discharging power. Can be:
+                   - float: Simple battery action (positive = charging, negative = discharging)
+                   - np.ndarray: For single action [battery] or multi-action [battery, consumption, production]
+                   - int: Will be converted to float for battery action
                    
         Returns:
             observation: Current state [battery_level, time, buy_price, sell_price]
-            reward: Cost-based reward for this step
-            done: Whether episode is complete
-            truncated: Whether episode was truncated
-            info: Additional metrics and state information
+            reward: Cost-based reward for this step (typically negative, representing costs)
+            done: Whether episode is complete (always False for this environment)
+            truncated: Whether episode was truncated due to reaching max steps
+            info: Dictionary containing detailed metrics including:
+                  - Battery state (level, energy_change)
+                  - Market position (net_exchange, revenue)
+                  - Grid impact (shortfall, reserve_cost)
+                  - Production and consumption values
+        
+        Raises:
+            ValueError: If the action doesn't match the expected format or dimensions
+            TypeError: If the action type is invalid
         """
         assert self.init, "Environment must be reset before stepping."
         
@@ -645,7 +690,17 @@ class PCSUnitController:
             
     def calculate_predicted_demand(self, time: float) -> float:
         """
-        Calculate predicted demand using selected pattern
+        Calculate predicted demand using selected pattern.
+        
+        This method determines the predicted electricity demand for a given time using
+        the configured demand pattern (e.g., SINUSOIDAL, RANDOM). The predicted demand
+        is used by the ISO to set prices and prepare dispatch.
+        
+        Args:
+            time: Current time as a fraction of day (0.0 to 1.0)
+            
+        Returns:
+            float: Predicted demand value (MWh) for the given time
         """
         return calculate_demand(
             time=time,

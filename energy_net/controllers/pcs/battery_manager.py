@@ -1,3 +1,21 @@
+"""
+Battery Manager Module
+
+This module handles all battery-related operations for the PCS controller.
+It encapsulates the logic for battery state updates, charging/discharging operations,
+and physical constraints enforcement.
+
+Key features:
+1. Battery state of charge tracking
+2. Enforcement of charge/discharge rate limits
+3. Efficiency losses during charging/discharging
+4. Battery capacity constraints
+5. Compatibility with the PCSUnit component
+
+This module enables realistic simulation of battery storage systems in 
+the PCS environment, with physically accurate constraints and behaviors.
+"""
+
 from typing import Dict, Any, Optional, List, Tuple
 import numpy as np
 import logging
@@ -7,11 +25,16 @@ class BatteryManager:
     """
     Manages battery operations for the PCS controller.
     
-    Responsibilities:
-    1. Tracking battery state (charge level)
-    2. Managing charge/discharge operations with constraints
-    3. Enforcing battery capacity and rate limits
-    4. Calculating energy changes and efficiency impacts
+    This class is responsible for:
+    1. Maintaining battery state of charge
+    2. Processing charge/discharge actions
+    3. Enforcing physical constraints and limitations
+    4. Calculating actual energy exchanges
+    5. Supporting both standalone operation and integration with PCSUnit
+    
+    By extracting this logic from the PCS controller, we make the controller cleaner
+    and more focused on its core responsibilities, while making battery operations
+    more maintainable and testable.
     """
     
     def __init__(
@@ -25,6 +48,15 @@ class BatteryManager:
         
         Args:
             battery_config: Configuration for the battery including capacity and efficiency
+                Expected keys include:
+                - min: Minimum battery level (default: 0.0)
+                - max: Maximum battery capacity (default: 100.0)
+                - charge_rate_max: Maximum charge rate in MWh/step (default: 10.0)
+                - discharge_rate_max: Maximum discharge rate in MWh/step (default: 10.0)
+                - charge_efficiency: Efficiency factor for charging (0-1, default: 1.0)
+                - discharge_efficiency: Efficiency factor for discharging (0-1, default: 1.0)
+                - init: Initial battery level (default: 0.0)
+                - lifetime_constant: Battery degradation parameter (default: 100.0)
             pcsunit: Reference to the PCSUnit instance to use for battery operations
             logger: Optional logger for tracking operations
         """
@@ -64,11 +96,20 @@ class BatteryManager:
         """
         Calculate energy change from a battery action.
         
+        This function determines how much energy will actually be added to or removed
+        from the battery based on the requested action, taking into account:
+        - Physical rate limits (charge_rate_max, discharge_rate_max)
+        - Efficiency losses during charging/discharging
+        - Available capacity and current state of charge
+        - Battery constraints (min/max capacity)
+        
         Args:
             action: Battery action (positive for charging, negative for discharging)
             
         Returns:
-            Tuple of (energy_change, new_battery_level)
+            Tuple containing:
+            - energy_change: Actual energy change (positive for charging, negative for discharging)
+            - new_battery_level: Predicted new battery level after applying the action
         """
         if self.pcsunit:
             # Get current state from PCSUnit
@@ -151,11 +192,15 @@ class BatteryManager:
         """
         Update battery state based on action.
         
+        This method applies the action to the battery, updating its state of charge
+        and tracking energy changes. It handles both direct battery management and
+        operation via the PCSUnit component.
+        
         Args:
             action: Battery action (positive for charging, negative for discharging)
             
         Returns:
-            Actual energy change after applying constraints
+            float: Actual energy change after applying constraints
         """
         if self.pcsunit:
             # Store previous level for tracking (use the exact value, not rounded)
@@ -196,11 +241,17 @@ class BatteryManager:
         """
         Validate and constrain a proposed battery action based on current state.
         
+        This method ensures that battery actions respect physical constraints:
+        - Prevents discharging when battery is at minimum level
+        - Scales down discharge actions when battery is nearly empty
+        - Limits charging when battery is at maximum capacity
+        - Enforces charge/discharge rate limits
+        
         Args:
-            action: Proposed battery action
+            action: Proposed battery action (positive for charging, negative for discharging)
             
         Returns:
-            Validated action within allowable bounds
+            float: Validated action within allowable bounds
         """
         # Use a small epsilon to avoid floating point precision issues
         EPSILON = 1e-6
@@ -330,8 +381,16 @@ class BatteryManager:
         """
         Get current battery state.
         
+        Returns a comprehensive dictionary with all relevant battery state information,
+        including current level, energy change, available capacity, and usage ratios.
+        
         Returns:
-            Dictionary with battery state information
+            Dictionary containing:
+            - battery_level: Current battery state of charge (MWh)
+            - energy_change: Most recent energy change (MWh)
+            - available_capacity: Remaining capacity available (MWh)
+            - used_capacity_ratio: Fraction of total capacity currently used (0-1)
+            - previous_level: Previous battery level before last update (MWh)
         """
         if self.pcsunit:
             current_level = self.pcsunit.battery.energy_level
@@ -363,8 +422,11 @@ class BatteryManager:
         """
         Get current battery level.
         
+        Provides the current battery state of charge, either from the internal
+        tracking or from the PCSUnit component if being used.
+        
         Returns:
-            Current battery level in MWh
+            float: Current battery level in MWh
         """
         # Always use the most up-to-date value
         if self.pcsunit:
@@ -375,6 +437,9 @@ class BatteryManager:
     def reset(self, initial_level: Optional[float] = None) -> None:
         """
         Reset battery to initial or specified level.
+        
+        This method resets the battery to either a specified level or the default
+        initial level from configuration. All tracking variables are also reset.
         
         Args:
             initial_level: Optional level to reset to (uses default if None)
@@ -405,4 +470,4 @@ class BatteryManager:
             self.current_time_step = 0
             
             if self.logger:
-                self.logger.info(f"Battery reset to {self.battery_level:.2f} MWh") 
+                self.logger.info(f"Battery reset to {self.battery_level:.2f} MWh")

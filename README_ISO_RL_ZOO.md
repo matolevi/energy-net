@@ -145,7 +145,7 @@ python eval_iso_zoo.py [OPTIONS]
 ./optimize_iso_zoo.sh --algo PPO --n-trials 1 --n-timesteps 1 --eval-episodes 1 --pricing-policy QUADRATIC
 
 # Train briefly with optimized hyperparameters
-./run_iso_zoo.sh --algo PPO --demand-pattern SINUSOIDAL --cost-type CONSTANT --pricing-policy QUADRATIC --total-timesteps 480000 --eval-episodes 5
+./run_iso_zoo.sh --algo PPO --demand-pattern SINUSOIDAL --cost-type CONSTANT --pricing-policy QUADRATIC --total-timesteps 4800 --eval-episodes 5 --dispatch-strategy predicted_demand --use-dispatch-action
 ```
 
 ### Full Training Run (1-2 hours)
@@ -218,7 +218,7 @@ After training, check the `eval_results/` directory for detailed visualizations 
 
 ## ISO-Specific Features
 
-The ISO agent has specific parameters and features compared to other agents:
+The Independent System Operator (ISO) agent represents a grid operator with specific parameters and features:
 
 1. **Pricing Policies**:
    - `ONLINE`: Direct price setting for buy and sell prices
@@ -226,7 +226,10 @@ The ISO agent has specific parameters and features compared to other agents:
    - `CONSTANT`: Uses fixed prices
 
 2. **PCS Agent Simulation**:
-   The `--num-pcs-agents` parameter allows simulating multiple PCS agents in the environment.
+   The `--num-pcs-agents` parameter allows simulating multiple Power Consumption and Storage (PCS) units in the environment, representing consumers/prosumers with battery storage capability.
+
+3. **Dispatch Control**:
+   The ISO can control electricity dispatch in addition to pricing using the `--use-dispatch-action` parameter, allowing for more comprehensive grid management.
 
 ## Troubleshooting
 
@@ -240,4 +243,4 @@ The ISO agent has specific parameters and features compared to other agents:
 **Solution**: Ensure you're using a valid pricing policy (ONLINE, QUADRATIC, CONSTANT) and that it's properly capitalized.
 
 **Issue**: Out of memory errors.
-**Solution**: Reduce batch size or network size in the hyperparameters. 
+**Solution**: Reduce batch size or network size in the hyperparameters.
