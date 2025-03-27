@@ -7,6 +7,12 @@ pricing:
     min_price: 0.0
     max_price: 20.0
 
+# Enable dispatch action
+dispatch:
+  use_dispatch_action: true
+  parameters:
+    min: 0.0
+    max: 300.0
 
 # Action space configurations for different pricing policies
 action_spaces:

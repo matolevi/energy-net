@@ -1,7 +1,0 @@
-numpy
-pettingzoo
-scipy
-stable-baselines3
-wandb
-tensorboard
-rl_zoo3

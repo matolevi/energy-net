@@ -23,7 +23,7 @@ from typing import Dict, Any, Union, Tuple, List, Optional
 import numpy as np
 import logging
 from abc import ABC, abstractmethod
-from energy_net.env import PricingPolicy
+from energy_net.market.pricing_policy import PricingPolicy
 from gymnasium import spaces
 from energy_net.market.iso.quadratic_pricing_iso import QuadraticPricingISO
 
@@ -291,10 +291,11 @@ class QuadraticPricingStrategy(PricingStrategy):
         
         # Calculate prices using the polynomial coefficients
         buy_pricing_fn = self.buy_iso.get_pricing_function({'demand': predicted_demand}) if self.buy_iso else lambda x: 0
-        iso_buy_price = max(buy_pricing_fn(1.0), 0)
+        iso_buy_price = max(buy_pricing_fn(predicted_demand), 0)
 
         sell_pricing_fn = self.sell_iso.get_pricing_function({'demand': predicted_demand}) if self.sell_iso else lambda x: 0
-        iso_sell_price = max(sell_pricing_fn(1.0), 0)
+        iso_sell_price = 0.9*iso_buy_price
+        #iso_sell_price = max(sell_pricing_fn(predicted_demand), 0)
         
         # Calculate dispatch based on policy
         if use_dispatch_action and step_count > 0 and step_count <= len(self.dispatch_profile):
@@ -549,6 +550,8 @@ class OnlinePricingStrategy(PricingStrategy):
                 f"Buy Price [{self.buy_price_min}, {self.buy_price_max}], "
                 f"Sell Price [{self.sell_price_min}, {self.sell_price_max}]"
             )
+    
+
     
     def create_action_space(self, use_dispatch_action: bool = False) -> spaces.Space:
         """

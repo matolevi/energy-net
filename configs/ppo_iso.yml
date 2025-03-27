@@ -1,0 +1,4 @@
+ISO-RLZoo-v0:
+  policy: "MlpPolicy"
+  n_timesteps: !!float 1e6
+  normalize: true

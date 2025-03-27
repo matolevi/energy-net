@@ -88,6 +88,7 @@ class BatteryManager:
         self.previous_level = self.battery_level
         self.energy_change = 0.0
         self.current_time_step = 0
+        self.last_action = 0.0
         
         if self.logger:
             self.logger.info(f"Battery Manager initialized with capacity: [{self.battery_min}, {self.battery_max}] MWh")
@@ -202,6 +203,9 @@ class BatteryManager:
         Returns:
             float: Actual energy change after applying constraints
         """
+        # Store the last action
+        self.last_action = action
+        
         if self.pcsunit:
             # Store previous level for tracking (use the exact value, not rounded)
             self.previous_level = self.pcsunit.battery.energy_level
@@ -455,6 +459,7 @@ class BatteryManager:
             self.battery_level = self.pcsunit.battery.energy_level
             self.energy_change = 0.0
             self.current_time_step = 0
+            self.last_action = 0.0
             
             if self.logger:
                 self.logger.info(f"Battery tracking reset to {self.battery_level:.2f} MWh")
@@ -468,6 +473,16 @@ class BatteryManager:
             self.previous_level = self.battery_level
             self.energy_change = 0.0
             self.current_time_step = 0
+            self.last_action = 0.0
             
             if self.logger:
                 self.logger.info(f"Battery reset to {self.battery_level:.2f} MWh")
+                
+    def get_last_action(self) -> float:
+        """
+        Get the most recent battery action.
+        
+        Returns:
+            float: The most recent battery action (positive for charging, negative for discharging)
+        """
+        return self.last_action
