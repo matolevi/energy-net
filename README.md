@@ -345,12 +345,3 @@ Please refer to [READMEzoo.md](READMEzoo.md) for comprehensive examples and inst
 3. **Unable to load policies**
    - Verify that policy paths are correct in the training script
    - Ensure the saved policies have compatible architecture with the current environment
-
-## Contributors
-
-- Sarah Keren (sarahk@technion.ac.il)
-- CLAIR Lab, Technion
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details. 
