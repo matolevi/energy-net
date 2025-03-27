@@ -227,31 +227,6 @@ Available options include:
    - `PERIODIC`: Repeating patterns
    - `SPIKES`: Demand with occasional spikes
 
-## Action Scaling Mechanism
-
-A critical component of this system is proper action scaling between the neural network policies and the environment:
-
-1. **Problem**: Neural networks output actions in [-1, 1] range (from tanh activation functions), but the environment expects actions in different ranges (e.g., battery charge rate in [-10, 10] MWh, prices in [1, 10] $/MWh)
-
-2. **Solution**: The system includes action unnormalization methods in the wrappers that convert normalized policy actions back to the environment's expected ranges:
-
-```python
-def _unnormalize_action(self, normalized_action):
-    """Convert action from [-1, 1] to original space"""
-    low = self.action_space.low
-    high = self.action_space.high
-    
-    # Standard linear rescaling
-    return low + (normalized_action + 1.0) * 0.5 * (high - low)
-```
-
-The formula maps:
-- -1.0 → low (minimum action value)
-- 0.0 → (low + high)/2 (middle value)
-- 1.0 → high (maximum action value)
-
-This mechanism is crucial for the alternating training process where fixed policies must interact correctly with the environment.
-
 ## Environment Wrappers
 
 The system uses several wrappers to adapt the multi-agent environment for single-agent training:
